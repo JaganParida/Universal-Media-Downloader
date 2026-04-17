@@ -1,108 +1,121 @@
 const express = require("express");
 const cors = require("cors");
-const youtubedl = require("yt-dlp-exec");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-const { execSync } = require("child_process");
+const youtubedl = require("youtube-dl-exec");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-/**
- * 1. Fetch Metadata (Thumbnail, Title, Formats)
- */
+// ==========================================
+// Helper Function to Clean URLs
+// ==========================================
+const cleanUrl = (rawUrl) => {
+  try {
+    const parsedUrl = new URL(rawUrl);
+    parsedUrl.searchParams.delete("si"); // Remove YouTube tracking params
+    return parsedUrl.toString();
+  } catch (e) {
+    return rawUrl; // Return original if parsing fails
+  }
+};
+
+// ==========================================
+// 1. Fetch Metadata (Thumbnail, Title, Formats)
+// ==========================================
 app.post("/api/info", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
 
   try {
-    const output = await youtubedl(url, {
+    // Clean the URL before processing
+    const targetUrl = cleanUrl(url);
+
+    const output = await youtubedl(targetUrl, {
       dumpSingleJson: true,
       noCheckCertificates: true,
       noWarnings: true,
-      addHeader: ["referer:youtube.com"],
+      preferFreeFormats: true,
+      forceIpv4: true,
+      cookiesFromBrowser: "opera",
+      // Removed the fake referer header to prevent 403 blocks
     });
 
     const videoInfo = {
       title: output.title,
       thumbnail: output.thumbnail,
       duration: output.duration_string,
+      // Filter out junk formats and only keep useful video/audio streams
       formats: output.formats
-        .filter((f) => f.vcodec !== "none") // only video formats
+        .filter((f) => f.ext === "mp4" || f.ext === "m4a")
         .map((f) => ({
           format_id: f.format_id,
-          resolution: f.resolution || f.format_note || "HD",
-          ext: f.ext || "mp4",
+          resolution: f.resolution || "Audio Only",
+          ext: f.ext,
           filesize: f.filesize
-            ? (f.filesize / (1024 * 1024)).toFixed(2) + " MB"
-            : "Calculating...",
-          hasAudio: f.acodec !== "none" && f.acodec !== undefined,
-          hasVideo: f.vcodec !== "none", // required for frontend
+            ? (f.filesize / 1024 / 1024).toFixed(2) + " MB"
+            : "Unknown Size",
+          hasAudio: f.acodec !== "none",
+          hasVideo: f.vcodec !== "none",
         }))
-        .reverse(), // high quality first
+        // Prioritize formats that have BOTH video and audio built-in
+        .sort((a, b) => (b.hasAudio && b.hasVideo ? 1 : -1)),
     };
 
     res.json(videoInfo);
   } catch (error) {
-    console.error("Info Error:", error.message);
-    res.status(500).json({ error: "Could not fetch video details." });
+    console.error("yt-dlp error:", error.message);
+    res.status(500).json({
+      error: "Failed to fetch video. Check backend console for details.",
+    });
   }
 });
 
-/**
- * 2. Download Route (Auto Audio Merge + Safe)
- */
+// ==========================================
+// 2. Stream the Download to the User
+// ==========================================
 app.get("/api/download", async (req, res) => {
   const { url, format_id, title } = req.query;
 
   if (!url || !format_id) {
-    return res.status(400).send("Invalid Request");
+    return res.status(400).send("Missing URL or Format ID");
   }
 
-  const safeTitle = (title || "video").replace(/[^\w\s-]/gi, "");
-  const tempFilePath = path.join(os.tmpdir(), `dl-${Date.now()}.mp4`);
+  // Clean the title so it's safe for a filename
+  const safeTitle = (title || "download").replace(/[^\w\s-]/gi, "");
+
+  // Force the browser to download the file instead of playing it
+  res.header("Content-Disposition", `attachment; filename="${safeTitle}.mp4"`);
 
   try {
-    console.log(`Downloading: ${safeTitle}`);
+    // Clean the URL here as well to ensure the download doesn't fail
+    const targetUrl = cleanUrl(url);
 
-    // ✅ Ensure FFmpeg exists
-    try {
-      execSync("ffmpeg -version", { stdio: "ignore" });
-    } catch {
-      return res.status(500).send("FFmpeg not installed on server");
-    }
-
-    // ✅ Always safe: merge video + best audio
-    const formatConfig = `${format_id}+bestaudio/best`;
-
-    await youtubedl(url, {
-      format: formatConfig,
-      output: tempFilePath,
-      mergeOutputFormat: "mp4",
+    // Execute yt-dlp and pipe the output DIRECTLY to the response
+    // This prevents the server from running out of disk space or RAM!
+    const subprocess = youtubedl.exec(targetUrl, {
+      format: format_id,
+      output: "-", // Tells yt-dlp to output to standard output
       noCheckCertificates: true,
+      noWarnings: true,
+      forceIpv4: true,
+      cookiesFromBrowser: "opera",
     });
 
-    // ✅ Send file
-    res.download(tempFilePath, `${safeTitle}.mp4`, (err) => {
-      if (err) console.error("Send error:", err);
+    // Pipe the download stream directly to the user's browser
+    subprocess.stdout.pipe(res);
 
-      // ✅ Cleanup safely
-      fs.unlink(tempFilePath, () => {});
+    subprocess.stderr.on("data", (data) => {
+      console.log(`yt-dlp log: ${data}`);
     });
   } catch (error) {
-    console.error("Download Error:", error.message);
-
-    fs.unlink(tempFilePath, () => {});
-
+    console.error("Download streaming error:", error);
     if (!res.headersSent) {
-      res.status(500).send("Download failed. Check FFmpeg installation.");
+      res.status(500).send("Failed to stream download.");
     }
   }
 });
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
-  console.log(`🚀 Backend running at http://localhost:${PORT}`),
+  console.log(`🚀 API Server running on http://localhost:${PORT}`),
 );
