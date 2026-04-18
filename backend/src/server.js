@@ -36,8 +36,6 @@ app.post("/api/info", async (req, res) => {
       noWarnings: true,
       preferFreeFormats: true,
       forceIpv4: true,
-      cookiesFromBrowser: "opera",
-      // Removed the fake referer header to prevent 403 blocks
     });
 
     const videoInfo = {
