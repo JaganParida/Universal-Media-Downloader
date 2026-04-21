@@ -164,7 +164,7 @@ const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
   throw lastError;
 };
 
-// ─── TEMP FILE FINDER FIX ───
+// ─── TEMP FILE FINDER ───
 const findTempFile = (basePath) => {
   if (fs.existsSync(basePath)) return basePath;
   const dir = path.dirname(basePath);
@@ -173,7 +173,6 @@ const findTempFile = (basePath) => {
     const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
     const finalFile = files.find((f) => {
       if (f.endsWith(".part") || f.endsWith(".ytdl")) return false;
-      // Reject any file that looks like a raw stream fragment (e.g., udl_xxx.f137.mp4)
       if (f.includes(".f") && /\d/.test(f)) return false;
       return true;
     });
@@ -317,14 +316,13 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE BOSS MODE AUDIO FIX 🔥
+  // 🔥 THE FFMPEG FORCE MERGE FIX 🔥
   let formatStr;
   if (platform === "facebook" || platform === "instagram") {
-    // Frontend ke ID (jisme 'v' ho sakta hai) ko completely ignore karo.
-    // yt-dlp ko force karo ki sirf combined Audio+Video laaye!
-    formatStr = "best[vcodec!=none][acodec!=none]/b[ext=mp4]/best";
+    // FFMPEG ko force karo ki best video aur best audio ko download karke MERGE kare
+    formatStr = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b";
   } else {
-    // YouTube ke liye default fallback logic
+    // YouTube
     formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/bv*+ba/b`;
   }
 
@@ -348,10 +346,8 @@ const downloadMedia = async (req, res) => {
   };
 
   try {
-    // Yahan hum logs mein "Boss Mode" print kara rahe hain taaki tumhe
-    // Render logs mein dikh jaye ki latest code live ho chuka hai.
     console.log(
-      `⬇️  Downloading [${platform}] with Boss Mode format="${formatStr}"`,
+      `⬇️  Downloading [${platform}] with FFMPEG Force Merge format="${formatStr}"`,
     );
 
     await withRetry(() =>
