@@ -171,9 +171,10 @@ const findTempFile = (basePath) => {
   const base = path.basename(basePath, path.extname(basePath));
   try {
     const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
+    // DANGEROUS BUG FIXED: We specifically target files that are NOT fragments like .f137.mp4
     const finalFile = files.find((f) => {
       if (f.endsWith(".part") || f.endsWith(".ytdl")) return false;
-      if (f.includes(".f") && /\d/.test(f)) return false;
+      if (/\.f\d+\./.test(f)) return false;
       return true;
     });
     if (finalFile) return path.join(dir, finalFile);
@@ -299,7 +300,7 @@ const getMediaInfo = async (req, res) => {
 // ─── downloadMedia ────────────────────────────────────────────────────────────
 
 const downloadMedia = async (req, res) => {
-  const { url, format_id, title } = req.query;
+  const { url, format_id, title, hasAudio } = req.query;
 
   if (!url) {
     return res.status(400).send("Missing URL");
@@ -316,15 +317,13 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE BOSS MODE AUDIO FIX 🔥
+  // 🔥 THE FINAL AUDIO MERGE LOGIC 🔥
+  // We trust the frontend. If hasAudio is false (which it usually is for HD Facebook videos),
+  // we force yt-dlp to natively merge the best audio track into it.
   let formatStr;
-  if (platform === "facebook" || platform === "instagram") {
-    // 1. Hum frontend se aane wale format_id ko puri tarah IGNORE kar rahe hain.
-    // 2. Hum yt-dlp ko order de rahe hain: "Aisi best file dhundo jisme video aur audio DONO natively present hon".
-    // Isse Render par bina merge (bina ffmpeg crash) kiye, 100% sound ke sath video download hogi.
-    formatStr = "best[vcodec!=none][acodec!=none]/b[ext=mp4]/best";
+  if (hasAudio === "true") {
+    formatStr = `${format_id}/bv*+ba/b`;
   } else {
-    // YouTube ke liye normal logic chalega (ffmpeg merge agar zaroorat padi toh)
     formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/bv*+ba/b`;
   }
 
@@ -349,9 +348,11 @@ const downloadMedia = async (req, res) => {
 
   try {
     console.log(
-      `⬇️  Downloading [${platform}] with Boss Mode format="${formatStr}"`,
+      `⬇️  Downloading [${platform}] format="${formatStr}" | hasAudio=${hasAudio}`,
     );
 
+    // No postprocessorArgs here! We let yt-dlp do a native '-c copy' merge
+    // which uses virtually zero RAM and keeps the server perfectly stable.
     await withRetry(() =>
       youtubedl(targetUrl, {
         ...options,
