@@ -31,9 +31,7 @@ const normalizeYouTubeUrl = (url) => {
   return url;
 };
 
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+// ─── BASE OPTIONS (Removed Custom Headers for FB/IG to prevent blocking) ───
 
 const BASE = {
   ffmpegLocation: ffmpegBin,
@@ -50,55 +48,28 @@ const BASE = {
 const PLATFORM_OPTIONS = {
   youtube: {
     ...BASE,
-    addHeader: [`user-agent:${UA}`, "accept-language:en-US,en;q=0.9"],
     extractorArgs: "youtube:player_client=web",
     geoBypass: true,
-    sleepRequests: 1,
   },
   facebook: {
     ...BASE,
-    addHeader: [
-      `user-agent:${UA}`,
-      "accept-language:en-US,en;q=0.9",
-      "referer:https://www.facebook.com/",
-    ],
     geoBypass: true,
+    // 🔥 FIX: No custom user-agent! Let yt-dlp use its native mobile API extractor.
   },
   instagram: {
     ...BASE,
-    addHeader: [
-      `user-agent:${UA}`,
-      "accept-language:en-US,en;q=0.9",
-      "referer:https://www.instagram.com/",
-    ],
     geoBypass: true,
-  },
-  twitter: {
-    ...BASE,
-    addHeader: [
-      `user-agent:${UA}`,
-      "accept-language:en-US,en;q=0.9",
-      "referer:https://twitter.com/",
-    ],
-    geoBypass: true,
-  },
-  tiktok: {
-    ...BASE,
-    addHeader: [
-      `user-agent:${UA}`,
-      "accept-language:en-US,en;q=0.9",
-      "referer:https://www.tiktok.com/",
-    ],
   },
   generic: {
     ...BASE,
-    addHeader: [`user-agent:${UA}`, "accept-language:en-US,en;q=0.9"],
     geoBypass: true,
   },
 };
 
 const getPlatformOptions = (platform) =>
   PLATFORM_OPTIONS[platform] ?? PLATFORM_OPTIONS.generic;
+
+// ─── Resolution Bucketing ───
 
 const bucketResolution = (width, height) => {
   const short = Math.min(width || 0, height || 0);
@@ -140,7 +111,6 @@ const friendlyError = (rawMessage = "") => {
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
   if (m.includes("rate") || m.includes("429"))
     return "Too many requests. Please wait a moment.";
-  if (m.includes("unsupported url")) return "This URL is not supported.";
   return "Could not fetch media. Make sure it is a valid, public video link.";
 };
 
@@ -252,7 +222,7 @@ const getMediaInfo = async (req, res) => {
 
     if (uniqueFormats.size === 0) {
       uniqueFormats.set("Best", {
-        format_id: "best",
+        format_id: "b",
         cleanRes: "Best",
         sortValue: 9999,
         ext: "mp4",
@@ -316,14 +286,17 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE FFMPEG FORCE MERGE FIX 🔥
-  let formatStr;
-  if (platform === "facebook" || platform === "instagram") {
-    // FFMPEG ko force karo ki best video aur best audio ko download karke MERGE kare
-    formatStr = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b";
-  } else {
-    // YouTube
-    formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/bv*+ba/b`;
+  // 🔥 THE NATIVE YT-DLP FIX 🔥
+  // By using "bv*+ba/b", yt-dlp will automatically handle Facebook correctly
+  // since we stopped interfering with its headers.
+  let formatStr = "bv*+ba/b";
+  if (
+    format_id &&
+    format_id !== "best" &&
+    format_id !== "undefined" &&
+    platform !== "facebook"
+  ) {
+    formatStr = `${format_id}+ba/bv*+ba/b`;
   }
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -340,15 +313,11 @@ const downloadMedia = async (req, res) => {
             fs.unlinkSync(path.join(dir, f));
           } catch (_) {}
         });
-    } catch (e) {
-      console.error("Cleanup error:", e.message);
-    }
+    } catch (e) {}
   };
 
   try {
-    console.log(
-      `⬇️  Downloading [${platform}] with FFMPEG Force Merge format="${formatStr}"`,
-    );
+    console.log(`⬇️  Downloading [${platform}] natively format="${formatStr}"`);
 
     await withRetry(() =>
       youtubedl(targetUrl, {
@@ -395,19 +364,9 @@ const downloadMedia = async (req, res) => {
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
 
-    stream.on("error", (err) => {
-      console.error("Stream error:", err.message);
-      cleanup();
-    });
-
-    res.on("finish", () => {
-      cleanup();
-      console.log(`🏁 Sent: ${safeTitle}.${ext}`);
-    });
-
-    res.on("close", () => {
-      cleanup();
-    });
+    stream.on("error", (err) => cleanup());
+    res.on("finish", () => cleanup());
+    res.on("close", () => cleanup());
   } catch (error) {
     console.error("❌ Download error:", error.message);
     cleanup();
