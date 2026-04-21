@@ -7,7 +7,6 @@ const fs = require("fs");
 
 const app = express();
 
-// CORS UPDATE: Frontend ko file size (Content-Length) read karne ki permission dena zaroori hai
 app.use(
   cors({
     exposedHeaders: ["Content-Length", "Content-Disposition"],
@@ -40,23 +39,70 @@ app.post("/api/info", async (req, res) => {
       ffmpegLocation: ffmpeg,
     });
 
-    const videoInfo = {
-      title: output.title || "Social Media Video",
-      thumbnail: output.thumbnail || null,
-      duration: output.duration_string || "N/A",
-      formats: output.formats
-        .filter((f) => f.ext === "mp4" || f.ext === "m4a")
-        .map((f) => ({
+    // --- Format Filtering & Clean-up Logic ---
+    const uniqueFormats = new Map();
+
+    output.formats
+      .filter((f) => f.ext === "mp4" || f.ext === "m4a")
+      .forEach((f) => {
+        // Determine clean resolution name (e.g., "1080p" instead of "1080x1919")
+        let resLabel = "Audio Only";
+        if (f.vcodec !== "none") {
+          // Use height for vertical videos, width for horizontal as standard 'p' format
+          const pixels = f.height || f.width;
+          resLabel = pixels ? `${pixels}p` : f.resolution;
+        }
+
+        // Keep only one best format per resolution
+        if (!uniqueFormats.has(resLabel)) {
+          uniqueFormats.set(resLabel, f);
+        } else {
+          // If we find a format with exact filesize, replace the old one
+          const existing = uniqueFormats.get(resLabel);
+          const existingSize = existing.filesize || existing.filesize_approx;
+          const newSize = f.filesize || f.filesize_approx;
+
+          if (!existingSize && newSize) {
+            uniqueFormats.set(resLabel, f);
+          }
+        }
+      });
+
+    // Map to final array
+    const cleanFormats = Array.from(uniqueFormats.values())
+      .map((f) => {
+        // Check both exact filesize and approximate filesize
+        const sizeBytes = f.filesize || f.filesize_approx;
+        const sizeString = sizeBytes
+          ? (sizeBytes / 1024 / 1024).toFixed(2) + " MB"
+          : "Calculated on Download";
+
+        let resLabel = "Audio Only";
+        if (f.vcodec !== "none") {
+          const pixels = f.height || f.width;
+          resLabel = pixels ? `${pixels}p` : f.resolution;
+        }
+
+        return {
           format_id: f.format_id,
-          resolution: f.resolution || "Audio Only",
+          resolution: resLabel,
           ext: f.ext,
-          filesize: f.filesize
-            ? (f.filesize / 1024 / 1024).toFixed(2) + " MB"
-            : "Unknown Size",
+          filesize: sizeString,
           hasAudio: f.acodec !== "none",
           hasVideo: f.vcodec !== "none",
-        }))
-        .sort((a, b) => (b.hasAudio && b.hasVideo ? 1 : -1)),
+        };
+      })
+      .sort((a, b) => {
+        // Sort Highest Quality First
+        if (a.hasVideo && b.hasVideo)
+          return parseInt(b.resolution) - parseInt(a.resolution);
+        return b.hasVideo ? 1 : -1;
+      });
+
+    const videoInfo = {
+      title: output.title || "Social Media Media",
+      thumbnail: output.thumbnail || null,
+      formats: cleanFormats,
     };
 
     res.json(videoInfo);

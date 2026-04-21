@@ -8,6 +8,9 @@ export default function Home() {
   const [error, setError] = useState("");
   const [selectedFormat, setSelectedFormat] = useState("");
 
+  // Image Fallback State
+  const [imgError, setImgError] = useState(false);
+
   // Progress States
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -19,6 +22,7 @@ export default function Home() {
     setVideoData(null);
     setDownloadProgress(0);
     setIsDownloading(false);
+    setImgError(false); // Reset image error state
 
     try {
       const response = await fetch(
@@ -50,7 +54,6 @@ export default function Home() {
     }
   };
 
-  // Advanced Fetch with Progress Tracking
   const handleDownload = async () => {
     if (!selectedFormat || !videoData) return;
 
@@ -65,7 +68,6 @@ export default function Home() {
       const response = await fetch(downloadUrl);
       if (!response.ok) throw new Error("Download failed at server.");
 
-      // Get content length to calculate percentage
       const contentLength = response.headers.get("Content-Length");
       const total = parseInt(contentLength, 10);
       let loaded = 0;
@@ -81,19 +83,15 @@ export default function Home() {
         loaded += value.length;
 
         if (total) {
-          // Actual exact percentage calculation
           setDownloadProgress(Math.round((loaded / total) * 100));
         } else {
-          // Fallback fake progress if size is unknown
           setDownloadProgress((prev) => Math.min(prev + 5, 95));
         }
       }
 
-      // Combine chunks into a single video Blob
       const blob = new Blob(chunks, { type: "video/mp4" });
       const blobUrl = URL.createObjectURL(blob);
 
-      // Native trigger to save file
       const a = document.createElement("a");
       a.href = blobUrl;
       a.download = `${videoData.title.replace(/[^\w\s-]/gi, "")}.mp4`;
@@ -104,14 +102,12 @@ export default function Home() {
 
       setDownloadProgress(100);
 
-      // Reset UI after 3 seconds
       setTimeout(() => {
         setIsDownloading(false);
         setDownloadProgress(0);
       }, 3000);
     } catch (err) {
       console.error("Stream Download Error:", err);
-      // Fallback: If blob fails (e.g. mobile RAM limit), use normal download
       window.location.href = downloadUrl;
       setIsDownloading(false);
     }
@@ -237,12 +233,15 @@ export default function Home() {
         {/* The Result Card */}
         {videoData && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 bg-white rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.06)] border border-neutral-100 overflow-hidden flex flex-col md:flex-row">
-            {/* Left side: Thumbnail or Glassmorphism Fallback */}
+            {/* Left side: Thumbnail or Glassmorphism Fallback (Added onError handler) */}
             <div className="md:w-5/12 relative group overflow-hidden bg-neutral-100 flex items-center justify-center min-h-[240px]">
-              {videoData.thumbnail && videoData.thumbnail !== "null" ? (
+              {videoData.thumbnail &&
+              videoData.thumbnail !== "null" &&
+              !imgError ? (
                 <img
                   src={videoData.thumbnail}
                   alt={videoData.title}
+                  onError={() => setImgError(true)}
                   className="w-full h-full object-cover absolute inset-0 group-hover:scale-105 transition-transform duration-700 ease-out"
                 />
               ) : (
@@ -265,9 +264,6 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              <div className="absolute bottom-3 right-3 bg-black/75 backdrop-blur-md text-white text-xs font-bold px-3 py-1.5 rounded-lg shadow-lg">
-                {videoData.duration}
-              </div>
             </div>
 
             {/* Right side: Controls */}
@@ -295,7 +291,7 @@ export default function Home() {
                   >
                     {videoData.formats.map((format) => (
                       <option key={format.format_id} value={format.format_id}>
-                        {format.hasVideo ? "[Video]" : "[Audio]"}{" "}
+                        {format.hasVideo ? "Video" : "Audio"} •{" "}
                         {format.resolution} • {format.ext.toUpperCase()} (
                         {format.filesize})
                       </option>
