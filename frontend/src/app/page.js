@@ -1,19 +1,31 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 export default function Home() {
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [videoData, setVideoData] = useState(null);
   const [error, setError] = useState("");
-  const [selectedFormat, setSelectedFormat] = useState("");
 
-  // Image Fallback State
-  const [imgError, setImgError] = useState(false);
-
-  // Progress States
+  // Advanced Dropdown & Progress States
+  const [selectedFormatObj, setSelectedFormatObj] = useState(null);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [imgError, setImgError] = useState(false);
+
+  const dropdownRef = useRef(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const fetchMetadata = async (e) => {
     e.preventDefault();
@@ -22,7 +34,7 @@ export default function Home() {
     setVideoData(null);
     setDownloadProgress(0);
     setIsDownloading(false);
-    setImgError(false); // Reset image error state
+    setImgError(false);
 
     try {
       const response = await fetch(
@@ -37,15 +49,13 @@ export default function Home() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.error || "Could not analyze the link. Make sure it is public.",
-        );
+        throw new Error(data.error || "Could not analyze the link.");
       }
 
       setVideoData(data);
 
       if (data.formats && data.formats.length > 0) {
-        setSelectedFormat(data.formats[0].format_id);
+        setSelectedFormatObj(data.formats[0]);
       }
     } catch (err) {
       setError(err.message);
@@ -55,14 +65,14 @@ export default function Home() {
   };
 
   const handleDownload = async () => {
-    if (!selectedFormat || !videoData) return;
+    if (!selectedFormatObj || !videoData) return;
 
     setIsDownloading(true);
     setDownloadProgress(0);
 
     const downloadUrl = `https://universal-media-downloader-re6r.onrender.com/api/download?url=${encodeURIComponent(
       url,
-    )}&format_id=${selectedFormat}&title=${encodeURIComponent(videoData.title)}`;
+    )}&format_id=${selectedFormatObj.format_id}&title=${encodeURIComponent(videoData.title)}`;
 
     try {
       const response = await fetch(downloadUrl);
@@ -114,11 +124,11 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-neutral-50 text-neutral-900 font-sans selection:bg-indigo-200">
-      <div className="max-w-3xl mx-auto px-6 py-16 md:py-24">
+    <main className="min-h-screen bg-[#fafafa] text-zinc-900 font-sans selection:bg-indigo-200">
+      <div className="max-w-4xl mx-auto px-4 py-12 md:py-20">
         {/* Premium Header */}
-        <div className="text-center mb-12 space-y-4">
-          <div className="inline-flex items-center justify-center p-3 mb-4 bg-indigo-50 rounded-2xl">
+        <div className="text-center mb-16 space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-700">
+          <div className="inline-flex items-center justify-center p-3.5 mb-2 bg-white rounded-2xl shadow-[0_2px_10px_rgb(0,0,0,0.04)] border border-zinc-100">
             <svg
               className="w-8 h-8 text-indigo-600"
               fill="none"
@@ -140,72 +150,74 @@ export default function Home() {
               ></path>
             </svg>
           </div>
-          <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-neutral-900">
+          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight text-zinc-900">
             Media{" "}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">
-              Downloader
+              Pro
             </span>
           </h1>
-          <p className="text-lg text-neutral-500 max-w-xl mx-auto font-medium">
-            Paste a public video link from Instagram or Facebook. Get your media
-            in high definition.
+          <p className="text-lg text-zinc-500 max-w-xl mx-auto font-medium">
+            Paste a public URL from Instagram or Facebook. Download pristine,
+            high-definition media directly to your device.
           </p>
         </div>
 
-        {/* Input Form */}
-        <div className="bg-white p-2 rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral-100 mb-8 transition-all hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)]">
-          <form
-            onSubmit={fetchMetadata}
-            className="flex flex-col md:flex-row gap-2"
-          >
-            <input
-              type="url"
-              required
-              placeholder="https://www.instagram.com/reel/..."
-              className="flex-1 px-6 py-4 bg-transparent focus:outline-none text-lg placeholder-neutral-400"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-            />
-            <button
-              type="submit"
-              disabled={isLoading || isDownloading}
-              className="px-8 py-4 bg-neutral-900 text-white font-semibold rounded-xl hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed transition-all duration-200 shadow-md active:scale-[0.98] flex items-center justify-center min-w-[160px]"
+        {/* Search Bar Container */}
+        <div className="relative z-20 max-w-2xl mx-auto">
+          <div className="bg-white p-2.5 rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.06)] border border-zinc-100 transition-all hover:shadow-[0_8px_40px_rgb(0,0,0,0.08)]">
+            <form
+              onSubmit={fetchMetadata}
+              className="flex flex-col md:flex-row gap-2"
             >
-              {isLoading ? (
-                <span className="flex items-center gap-2">
-                  <svg
-                    className="animate-spin h-5 w-5 text-white"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    ></circle>
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path>
-                  </svg>
-                  Processing
-                </span>
-              ) : (
-                "Fetch Media"
-              )}
-            </button>
-          </form>
+              <input
+                type="url"
+                required
+                placeholder="https://www.instagram.com/reel/..."
+                className="flex-1 px-6 py-4 bg-transparent focus:outline-none text-lg placeholder-zinc-400 font-medium"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+              <button
+                type="submit"
+                disabled={isLoading || isDownloading}
+                className="px-8 py-4 bg-zinc-900 text-white font-semibold rounded-xl hover:bg-zinc-800 disabled:bg-zinc-300 disabled:cursor-not-allowed transition-all duration-200 shadow-md active:scale-[0.98] flex items-center justify-center min-w-[160px]"
+              >
+                {isLoading ? (
+                  <span className="flex items-center gap-2">
+                    <svg
+                      className="animate-spin h-5 w-5 text-white"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    Analyzing
+                  </span>
+                ) : (
+                  "Fetch Media"
+                )}
+              </button>
+            </form>
+          </div>
         </div>
 
-        {/* Premium Error Warning */}
+        {/* Error State */}
         {error && (
-          <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 p-5 mb-8 bg-gradient-to-r from-red-50 to-orange-50 border border-red-100 rounded-2xl shadow-sm flex items-start gap-4">
-            <div className="p-2 bg-red-100 rounded-lg shrink-0">
+          <div className="mt-8 max-w-2xl mx-auto animate-in fade-in slide-in-from-bottom-2 duration-300 p-5 bg-red-50/50 border border-red-100 rounded-2xl flex items-start gap-4">
+            <div className="p-2 bg-red-100/50 rounded-lg shrink-0">
               <svg
                 className="w-6 h-6 text-red-600"
                 fill="none"
@@ -221,34 +233,39 @@ export default function Home() {
                 ></path>
               </svg>
             </div>
-            <div className="flex-1">
+            <div>
               <h3 className="text-red-800 font-bold text-lg">
-                Analysis Failed
+                Unable to Fetch
               </h3>
-              <p className="text-red-600 font-medium text-sm mt-1">{error}</p>
+              <p className="text-red-600/80 font-medium text-sm mt-1">
+                {error}
+              </p>
             </div>
           </div>
         )}
 
-        {/* The Result Card */}
+        {/* Result Card */}
         {videoData && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 bg-white rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.06)] border border-neutral-100 overflow-hidden flex flex-col md:flex-row">
-            {/* Left side: Thumbnail or Glassmorphism Fallback (Added onError handler) */}
-            <div className="md:w-5/12 relative group overflow-hidden bg-neutral-100 flex items-center justify-center min-h-[240px]">
+          <div className="mt-12 animate-in fade-in slide-in-from-bottom-6 duration-700 bg-white rounded-3xl shadow-[0_20px_60px_-15px_rgba(0,0,0,0.05)] border border-zinc-100 overflow-hidden flex flex-col md:flex-row relative z-10">
+            {/* Left side: Premium Image Display */}
+            <div className="md:w-5/12 relative group overflow-hidden bg-zinc-50 flex items-center justify-center min-h-[300px]">
               {videoData.thumbnail &&
               videoData.thumbnail !== "null" &&
               !imgError ? (
-                <img
-                  src={videoData.thumbnail}
-                  alt={videoData.title}
-                  onError={() => setImgError(true)}
-                  className="w-full h-full object-cover absolute inset-0 group-hover:scale-105 transition-transform duration-700 ease-out"
-                />
+                <>
+                  <div className="absolute inset-0 bg-black/10 z-10 group-hover:bg-black/0 transition-colors duration-500"></div>
+                  <img
+                    src={videoData.thumbnail}
+                    alt={videoData.title}
+                    onError={() => setImgError(true)}
+                    className="w-full h-full object-cover absolute inset-0 group-hover:scale-105 transition-transform duration-700 ease-out"
+                  />
+                </>
               ) : (
-                <div className="w-full h-full absolute inset-0 bg-gradient-to-br from-indigo-50 to-neutral-100 flex items-center justify-center border-r border-neutral-100">
+                <div className="w-full h-full absolute inset-0 bg-gradient-to-br from-indigo-50 to-zinc-50 flex items-center justify-center border-r border-zinc-100">
                   <div className="w-24 h-24 bg-white/60 backdrop-blur-xl rounded-2xl shadow-sm flex items-center justify-center border border-white">
                     <svg
-                      className="w-10 h-10 text-indigo-300"
+                      className="w-10 h-10 text-indigo-400"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -266,46 +283,154 @@ export default function Home() {
               )}
             </div>
 
-            {/* Right side: Controls */}
-            <div className="md:w-7/12 p-8 flex flex-col justify-between bg-white z-10 relative">
-              <div>
+            {/* Right side: Action Area */}
+            <div className="md:w-7/12 p-8 md:p-10 flex flex-col justify-center bg-white">
+              <div className="mb-8">
+                <span className="inline-block px-3 py-1 bg-zinc-100 text-zinc-600 text-xs font-bold rounded-full mb-4 tracking-wider uppercase">
+                  Ready to Download
+                </span>
                 <h2
-                  className="text-xl font-bold text-neutral-900 leading-snug mb-2 line-clamp-2"
+                  className="text-2xl font-bold text-zinc-900 leading-tight mb-3 line-clamp-2"
                   title={videoData.title}
                 >
                   {videoData.title}
                 </h2>
-                <p className="text-sm text-neutral-500 mb-8 font-medium">
-                  Select your preferred quality below. High-res files will be
-                  processed before downloading.
+                <p className="text-sm text-zinc-500 font-medium">
+                  Select your desired resolution. Files are securely processed
+                  and merged before saving.
                 </p>
               </div>
 
-              <div className="space-y-4">
-                <div className="relative">
-                  <select
-                    className="w-full appearance-none bg-neutral-50 border border-neutral-200 text-neutral-900 text-sm font-medium rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 block p-4 pr-10 cursor-pointer transition-all shadow-sm hover:bg-neutral-100"
-                    value={selectedFormat}
-                    onChange={(e) => setSelectedFormat(e.target.value)}
+              <div className="space-y-5">
+                {/* Custom Premium Dropdown */}
+                <div className="relative" ref={dropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                     disabled={isDownloading}
+                    className="w-full flex items-center justify-between bg-white border border-zinc-200 text-zinc-900 text-base font-medium rounded-xl p-4 shadow-sm hover:border-indigo-300 hover:ring-2 hover:ring-indigo-100 transition-all focus:outline-none"
                   >
-                    {videoData.formats.map((format) => (
-                      <option key={format.format_id} value={format.format_id}>
-                        {format.hasVideo ? "Video" : "Audio"} •{" "}
-                        {format.resolution} • {format.ext.toUpperCase()} (
-                        {format.filesize})
-                      </option>
-                    ))}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-neutral-500">
+                    {selectedFormatObj ? (
+                      <span className="flex items-center gap-3">
+                        <span
+                          className={`p-1.5 rounded-md ${selectedFormatObj.hasVideo ? "bg-indigo-50 text-indigo-600" : "bg-purple-50 text-purple-600"}`}
+                        >
+                          {selectedFormatObj.hasVideo ? (
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth="2"
+                                d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                              ></path>
+                            </svg>
+                          ) : (
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth="2"
+                                d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
+                              ></path>
+                            </svg>
+                          )}
+                        </span>
+                        <span>
+                          {selectedFormatObj.resolution} •{" "}
+                          {selectedFormatObj.ext.toUpperCase()}{" "}
+                          {selectedFormatObj.filesize
+                            ? `(${selectedFormatObj.filesize})`
+                            : ""}
+                        </span>
+                      </span>
+                    ) : (
+                      "Select Quality"
+                    )}
                     <svg
-                      className="fill-current h-4 w-4"
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 0 20 20"
+                      className={`w-5 h-5 text-zinc-400 transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : ""}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
                     >
-                      <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M19 9l-7 7-7-7"
+                      ></path>
                     </svg>
-                  </div>
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {isDropdownOpen && (
+                    <div className="absolute z-50 w-full mt-2 bg-white border border-zinc-100 rounded-xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] py-2 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                      {videoData.formats.map((format, idx) => (
+                        <button
+                          key={format.format_id + idx}
+                          onClick={() => {
+                            setSelectedFormatObj(format);
+                            setIsDropdownOpen(false);
+                          }}
+                          className={`w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-zinc-50 transition-colors ${selectedFormatObj?.format_id === format.format_id ? "bg-indigo-50/50 text-indigo-700 font-semibold" : "text-zinc-700 font-medium"}`}
+                        >
+                          <span
+                            className={`p-1.5 rounded-md ${format.hasVideo ? "bg-indigo-50 text-indigo-500" : "bg-purple-50 text-purple-500"}`}
+                          >
+                            {format.hasVideo ? (
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth="2"
+                                  d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                                ></path>
+                              </svg>
+                            ) : (
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth="2"
+                                  d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
+                                ></path>
+                              </svg>
+                            )}
+                          </span>
+                          <span className="flex-1">
+                            {format.resolution}{" "}
+                            <span className="text-zinc-400 font-normal ml-1">
+                              • {format.ext.toUpperCase()}
+                            </span>
+                          </span>
+                          {format.filesize && (
+                            <span className="text-sm text-zinc-500">
+                              {format.filesize}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Animated Download Button */}
@@ -315,9 +440,9 @@ export default function Home() {
                   className={`relative w-full px-6 py-4 font-bold rounded-xl transition-all shadow-lg overflow-hidden flex justify-center items-center gap-2 active:scale-[0.98] ${
                     isDownloading
                       ? downloadProgress === 100
-                        ? "bg-green-500 text-white shadow-green-500/25"
+                        ? "bg-green-500 text-white shadow-green-500/25 ring-2 ring-green-500 ring-offset-2"
                         : "bg-indigo-50 text-indigo-700 border border-indigo-100 shadow-none"
-                      : "bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:opacity-90 shadow-indigo-500/25"
+                      : "bg-zinc-900 text-white hover:bg-zinc-800 shadow-zinc-900/20"
                   }`}
                 >
                   {/* Progress Bar Background fill */}
@@ -347,7 +472,7 @@ export default function Home() {
                               d="M5 13l4 4L19 7"
                             ></path>
                           </svg>
-                          Completed!
+                          Download Complete!
                         </>
                       ) : (
                         <>
@@ -371,15 +496,14 @@ export default function Home() {
                               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                             ></path>
                           </svg>
-                          Downloading... {downloadProgress}%
+                          Processing... {downloadProgress}%
                         </>
                       )
                     ) : (
                       <>
                         <svg
+                          className="w-5 h-5"
                           xmlns="http://www.w3.org/2000/svg"
-                          width="20"
-                          height="20"
                           viewBox="0 0 24 24"
                           fill="none"
                           stroke="currentColor"
