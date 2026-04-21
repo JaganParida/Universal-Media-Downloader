@@ -1,8 +1,9 @@
 const express = require("express");
 const cors = require("cors");
 const youtubedl = require("youtube-dl-exec");
-const path = require("path"); // File path handle karne ke liye
+const path = require("path");
 const ffmpeg = require("ffmpeg-static");
+const fs = require("fs"); // File system for temporary saving and deleting
 
 const app = express();
 app.use(cors());
@@ -14,10 +15,10 @@ app.use(express.json());
 const cleanUrl = (rawUrl) => {
   try {
     const parsedUrl = new URL(rawUrl);
-    parsedUrl.searchParams.delete("si"); // Remove YouTube tracking params
+    parsedUrl.searchParams.delete("si"); // Remove tracking params
     return parsedUrl.toString();
   } catch (e) {
-    return rawUrl; // Return original if parsing fails
+    return rawUrl;
   }
 };
 
@@ -36,15 +37,14 @@ app.post("/api/info", async (req, res) => {
       noCheckCertificates: true,
       noWarnings: true,
       preferFreeFormats: true,
-      // Yahan humne exact file ka naam daal diya hai
       cookies: path.join(__dirname, "www.youtube.com_cookies.txt"),
       ffmpegLocation: ffmpeg,
     });
 
     const videoInfo = {
-      title: output.title,
-      thumbnail: output.thumbnail,
-      duration: output.duration_string,
+      title: output.title || "Social Media Video",
+      thumbnail: output.thumbnail || null, // Will trigger fallback UI if null
+      duration: output.duration_string || "N/A",
       formats: output.formats
         .filter((f) => f.ext === "mp4" || f.ext === "m4a")
         .map((f) => ({
@@ -62,15 +62,16 @@ app.post("/api/info", async (req, res) => {
 
     res.json(videoInfo);
   } catch (error) {
-    console.error("yt-dlp error:", error.message);
+    console.error("yt-dlp fetch error:", error.message);
     res.status(500).json({
-      error: "Failed to fetch video. Check backend console for details.",
+      error:
+        "Could not fetch media. The link might be private, broken, or unsupported.",
     });
   }
 });
 
 // ==========================================
-// 2. Stream the Download to the User
+// 2. Download & Merge (With Sound & 1080p)
 // ==========================================
 app.get("/api/download", async (req, res) => {
   const { url, format_id, title } = req.query;
@@ -79,31 +80,41 @@ app.get("/api/download", async (req, res) => {
     return res.status(400).send("Missing URL or Format ID");
   }
 
-  const safeTitle = (title || "download").replace(/[^\w\s-]/gi, "");
-  res.header("Content-Disposition", `attachment; filename="${safeTitle}.mp4"`);
+  const safeTitle = (title || "media_download").replace(/[^\w\s-]/gi, "");
+  const targetUrl = cleanUrl(url);
+
+  // Create a unique temporary file path
+  const tempFileName = `temp_${Date.now()}.mp4`;
+  const tempFilePath = path.join(__dirname, tempFileName);
 
   try {
-    const targetUrl = cleanUrl(url);
-
-    const subprocess = youtubedl.exec(targetUrl, {
-      format: format_id,
-      output: "-",
+    // Forcefully merge the selected video format with the best available audio
+    await youtubedl(targetUrl, {
+      format: `${format_id}+bestaudio/best`,
+      output: tempFilePath, // Save to disk temporarily so FFmpeg can merge sound
       noCheckCertificates: true,
       noWarnings: true,
-      // Yahan bhi cookies set kar di hain
       cookies: path.join(__dirname, "www.youtube.com_cookies.txt"),
       ffmpegLocation: ffmpeg,
     });
 
-    subprocess.stdout.pipe(res);
-
-    subprocess.stderr.on("data", (data) => {
-      console.log(`yt-dlp log: ${data}`);
+    // Send the merged file to the user's browser
+    res.download(tempFilePath, `${safeTitle}.mp4`, (err) => {
+      // Delete the file immediately after sending to free up server storage
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
     });
   } catch (error) {
-    console.error("Download streaming error:", error);
+    console.error("Download processing error:", error.message);
+    // Cleanup file if process fails midway
+    if (fs.existsSync(tempFilePath)) {
+      fs.unlinkSync(tempFilePath);
+    }
     if (!res.headersSent) {
-      res.status(500).send("Failed to stream download.");
+      res
+        .status(500)
+        .send("Failed to process the media file. Please try again.");
     }
   }
 });
