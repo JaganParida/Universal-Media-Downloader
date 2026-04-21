@@ -305,30 +305,33 @@ const getMediaInfo = async (req, res) => {
 const downloadMedia = async (req, res) => {
   const { url, format_id, title, hasAudio } = req.query;
 
-  if (!url || !format_id)
-    return res.status(400).send("Missing URL or format_id");
+  if (!url) {
+    return res.status(400).send("Missing URL");
+  }
 
   const safeTitle =
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
   let targetUrl = cleanUrl(url);
   const platform = detectPlatform(targetUrl);
 
-  if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+  if (platform === "youtube") {
+    targetUrl = normalizeYouTubeUrl(targetUrl);
+  }
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 BYPASS FFMPEG MERGE FOR FACEBOOK/INSTAGRAM 🔥
+  // 🔥 THE ULTIMATE MASTER OVERRIDE FOR FACEBOOK/INSTAGRAM 🔥
   let formatStr;
   if (platform === "facebook" || platform === "instagram") {
-    // We forcefully tell yt-dlp to download the exact format OR fallback to 'hd/sd'.
-    // We completely remove any "+ba" commands so it never attempts to merge.
-    formatStr = `${format_id}/hd/sd/best[vcodec!=none][acodec!=none]`;
+    // Hum frontend ke format_id ko ignore kar rahe hain kyunki wo silent ho sakta hai.
+    // Hum yt-dlp ko force kar rahe hain: "Sirf wahi best format laao jisme Video aur Audio pehle se MERGED hain!"
+    formatStr = "best[vcodec!=none][acodec!=none]/b[ext=mp4]/best";
   } else {
-    // YouTube handles merging fine
+    // YouTube ke liye normal logic chalega
     if (hasAudio === "true") {
       formatStr = `${format_id}/bv*+ba/b`;
     } else {
-      formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+ba/bv*+ba/b`;
+      formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/bv*+ba/b`;
     }
   }
 
@@ -346,10 +349,16 @@ const downloadMedia = async (req, res) => {
             fs.unlinkSync(path.join(dir, f));
           } catch (_) {}
         });
-    } catch (e) {}
+    } catch (e) {
+      console.error("Cleanup error:", e.message);
+    }
   };
 
   try {
+    console.log(
+      `⬇️  Downloading [${platform}] with Master Override format="${formatStr}"`,
+    );
+
     await withRetry(() =>
       youtubedl(targetUrl, {
         ...options,
@@ -360,13 +369,21 @@ const downloadMedia = async (req, res) => {
     );
 
     const actualFile = findTempFile(tempFilePath);
-    if (!actualFile) throw new Error("Output file was not created.");
+    if (!actualFile) {
+      throw new Error("Output file was not created by yt-dlp.");
+    }
 
     const stat = fs.statSync(actualFile);
     if (stat.size === 0) {
       cleanup();
-      throw new Error("Downloaded file is empty.");
+      throw new Error(
+        "Downloaded file is empty. The video may be unavailable.",
+      );
     }
+
+    console.log(
+      `✅ Download ready: ${actualFile} (${(stat.size / 1_048_576).toFixed(1)} MB)`,
+    );
 
     const ext = path.extname(actualFile).slice(1) || "mp4";
     const mimeTypes = {
@@ -387,12 +404,25 @@ const downloadMedia = async (req, res) => {
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
 
-    stream.on("error", () => cleanup());
-    res.on("finish", () => cleanup());
-    res.on("close", () => cleanup());
+    stream.on("error", (err) => {
+      console.error("Stream error:", err.message);
+      cleanup();
+    });
+
+    res.on("finish", () => {
+      cleanup();
+      console.log(`🏁 Sent: ${safeTitle}.${ext}`);
+    });
+
+    res.on("close", () => {
+      cleanup();
+    });
   } catch (error) {
+    console.error("❌ Download error:", error.message);
     cleanup();
-    if (!res.headersSent) res.status(500).send(friendlyError(error.message));
+    if (!res.headersSent) {
+      res.status(500).send(friendlyError(error.message));
+    }
   }
 };
 
