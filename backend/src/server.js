@@ -6,25 +6,25 @@ const ffmpeg = require("ffmpeg-static");
 const fs = require("fs");
 
 const app = express();
-app.use(cors());
+
+// CORS UPDATE: Frontend ko file size (Content-Length) read karne ki permission dena zaroori hai
+app.use(
+  cors({
+    exposedHeaders: ["Content-Length", "Content-Disposition"],
+  }),
+);
 app.use(express.json());
 
-// ==========================================
-// Helper Function to Clean URLs
-// ==========================================
 const cleanUrl = (rawUrl) => {
   try {
     const parsedUrl = new URL(rawUrl);
-    parsedUrl.searchParams.delete("si"); // Remove tracking params
+    parsedUrl.searchParams.delete("si");
     return parsedUrl.toString();
   } catch (e) {
     return rawUrl;
   }
 };
 
-// ==========================================
-// 1. Fetch Metadata (Thumbnail, Title, Formats)
-// ==========================================
 app.post("/api/info", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -38,7 +38,6 @@ app.post("/api/info", async (req, res) => {
       noWarnings: true,
       preferFreeFormats: true,
       ffmpegLocation: ffmpeg,
-      // Cookies line completely removed
     });
 
     const videoInfo = {
@@ -70,9 +69,6 @@ app.post("/api/info", async (req, res) => {
   }
 });
 
-// ==========================================
-// 2. Download & Merge (With Sound & 1080p)
-// ==========================================
 app.get("/api/download", async (req, res) => {
   const { url, format_id, title } = req.query;
 
@@ -93,7 +89,6 @@ app.get("/api/download", async (req, res) => {
       noCheckCertificates: true,
       noWarnings: true,
       ffmpegLocation: ffmpeg,
-      // Cookies line completely removed
     });
 
     res.download(tempFilePath, `${safeTitle}.mp4`, (err) => {
