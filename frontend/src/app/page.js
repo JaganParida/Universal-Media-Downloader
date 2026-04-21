@@ -81,7 +81,7 @@ export default function Home() {
           </h1>
           <p className="text-lg text-neutral-500 max-w-xl mx-auto font-medium">
             Paste a public video link from Instagram or Facebook. Our system
-            handles the merging for crisp 1080p quality and audio.
+            handles the rest.
           </p>
         </div>
 

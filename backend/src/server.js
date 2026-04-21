@@ -3,7 +3,7 @@ const cors = require("cors");
 const youtubedl = require("youtube-dl-exec");
 const path = require("path");
 const ffmpeg = require("ffmpeg-static");
-const fs = require("fs"); // File system for temporary saving and deleting
+const fs = require("fs");
 
 const app = express();
 app.use(cors());
@@ -37,13 +37,13 @@ app.post("/api/info", async (req, res) => {
       noCheckCertificates: true,
       noWarnings: true,
       preferFreeFormats: true,
-      cookies: path.join(__dirname, "www.youtube.com_cookies.txt"),
       ffmpegLocation: ffmpeg,
+      // Cookies line completely removed
     });
 
     const videoInfo = {
       title: output.title || "Social Media Video",
-      thumbnail: output.thumbnail || null, // Will trigger fallback UI if null
+      thumbnail: output.thumbnail || null,
       duration: output.duration_string || "N/A",
       formats: output.formats
         .filter((f) => f.ext === "mp4" || f.ext === "m4a")
@@ -62,10 +62,10 @@ app.post("/api/info", async (req, res) => {
 
     res.json(videoInfo);
   } catch (error) {
-    console.error("yt-dlp fetch error:", error.message);
+    console.error("Fetch error:", error.message);
     res.status(500).json({
       error:
-        "Could not fetch media. The link might be private, broken, or unsupported.",
+        "Could not fetch media. Make sure it is a public Instagram or Facebook link.",
     });
   }
 });
@@ -83,31 +83,26 @@ app.get("/api/download", async (req, res) => {
   const safeTitle = (title || "media_download").replace(/[^\w\s-]/gi, "");
   const targetUrl = cleanUrl(url);
 
-  // Create a unique temporary file path
   const tempFileName = `temp_${Date.now()}.mp4`;
   const tempFilePath = path.join(__dirname, tempFileName);
 
   try {
-    // Forcefully merge the selected video format with the best available audio
     await youtubedl(targetUrl, {
       format: `${format_id}+bestaudio/best`,
-      output: tempFilePath, // Save to disk temporarily so FFmpeg can merge sound
+      output: tempFilePath,
       noCheckCertificates: true,
       noWarnings: true,
-      cookies: path.join(__dirname, "www.youtube.com_cookies.txt"),
       ffmpegLocation: ffmpeg,
+      // Cookies line completely removed
     });
 
-    // Send the merged file to the user's browser
     res.download(tempFilePath, `${safeTitle}.mp4`, (err) => {
-      // Delete the file immediately after sending to free up server storage
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
     });
   } catch (error) {
     console.error("Download processing error:", error.message);
-    // Cleanup file if process fails midway
     if (fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
     }
