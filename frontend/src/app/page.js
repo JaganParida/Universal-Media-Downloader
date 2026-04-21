@@ -16,11 +16,14 @@ export default function Home() {
     setVideoData(null);
 
     try {
-      const response = await fetch("http://localhost:5000/api/info", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
+      const response = await fetch(
+        "https://universal-media-downloader-re6r.onrender.com/api/info",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        },
+      );
 
       if (!response.ok)
         throw new Error("Could not analyze the link. Make sure it is public.");
@@ -44,7 +47,7 @@ export default function Home() {
     if (!selectedFormat || !videoData) return;
 
     // We build a URL that hits our backend GET route, passing the data as query parameters
-    const downloadUrl = `http://localhost:5000/api/download?url=${encodeURIComponent(url)}&format_id=${selectedFormat}&title=${encodeURIComponent(videoData.title)}`;
+    const downloadUrl = `https://universal-media-downloader-re6r.onrender.com/api/download?url=${encodeURIComponent(url)}&format_id=${selectedFormat}&title=${encodeURIComponent(videoData.title)}`;
 
     // Using window.location forces the browser to handle the file download natively
     window.location.href = downloadUrl;
@@ -205,7 +208,6 @@ export default function Home() {
           </div>
         )}
       </div>
-      
     </main>
   );
 }
