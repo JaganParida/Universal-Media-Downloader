@@ -173,6 +173,7 @@ const findTempFile = (basePath) => {
     const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
     const finalFile = files.find((f) => {
       if (f.endsWith(".part") || f.endsWith(".ytdl")) return false;
+      // Reject any file that looks like a raw stream fragment (e.g., udl_xxx.f137.mp4)
       if (f.includes(".f") && /\d/.test(f)) return false;
       return true;
     });
@@ -316,23 +317,15 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE SMART MERGE LOGIC 🔥
+  // 🔥 THE BOSS MODE AUDIO FIX 🔥
   let formatStr;
-
-  if (
-    format_id &&
-    format_id !== "best" &&
-    format_id !== "undefined" &&
-    format_id !== "null"
-  ) {
-    // Logic:
-    // 1. Agar frontend wale format_id mein dono Video+Audio pehle se hain, toh wahi download karo.
-    // 2. Agar nahi hain (DASH format), toh us format_id ke sath best audio download karke merge karo!
-    // 3. Agar kuch fail hota hai, toh default best video+audio merge karo.
-    formatStr = `${format_id}[vcodec!=none][acodec!=none]/${format_id}+ba/bv*+ba/b`;
+  if (platform === "facebook" || platform === "instagram") {
+    // Frontend ke ID (jisme 'v' ho sakta hai) ko completely ignore karo.
+    // yt-dlp ko force karo ki sirf combined Audio+Video laaye!
+    formatStr = "best[vcodec!=none][acodec!=none]/b[ext=mp4]/best";
   } else {
-    // Default fallback hamesha Video + Audio merging karega
-    formatStr = `bv*+ba/b`;
+    // YouTube ke liye default fallback logic
+    formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/bv*+ba/b`;
   }
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -355,8 +348,10 @@ const downloadMedia = async (req, res) => {
   };
 
   try {
+    // Yahan hum logs mein "Boss Mode" print kara rahe hain taaki tumhe
+    // Render logs mein dikh jaye ki latest code live ho chuka hai.
     console.log(
-      `⬇️  Downloading [${platform}] with Smart Merge format="${formatStr}"`,
+      `⬇️  Downloading [${platform}] with Boss Mode format="${formatStr}"`,
     );
 
     await withRetry(() =>
@@ -364,7 +359,7 @@ const downloadMedia = async (req, res) => {
         ...options,
         format: formatStr,
         output: tempFilePath,
-        mergeOutputFormat: "mp4", // Yeh command ensure karegi ki ffmpeg inko as MP4 merge karega
+        mergeOutputFormat: "mp4",
       }),
     );
 
