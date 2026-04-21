@@ -164,15 +164,20 @@ const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
   throw lastError;
 };
 
-// ─── ONLY PICK FULLY MERGED FILES ───
+// ─── TEMP FILE FINDER FIX ───
 const findTempFile = (basePath) => {
   if (fs.existsSync(basePath)) return basePath;
   const dir = path.dirname(basePath);
   const base = path.basename(basePath, path.extname(basePath));
   try {
     const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
-    const mergedFile = files.find((f) => !f.includes(".f"));
-    if (mergedFile) return path.join(dir, mergedFile);
+    // DANGEROUS BUG FIXED: We specifically target files that are NOT fragments like .f137.mp4
+    const finalFile = files.find((f) => {
+      if (f.endsWith(".part") || f.endsWith(".ytdl")) return false;
+      if (/\.f\d+\./.test(f)) return false;
+      return true;
+    });
+    if (finalFile) return path.join(dir, finalFile);
   } catch (_) {}
   return null;
 };
@@ -206,14 +211,6 @@ const getMediaInfo = async (req, res) => {
       .filter((f) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
-
-        // 🔥 THE MAGIC BULLET FOR FACEBOOK/INSTAGRAM 🔥
-        // We STRICTLY hide silent video streams from the frontend options.
-        // The user can ONLY select formats that natively have audio and video combined!
-        if (platform === "facebook" || platform === "instagram") {
-          return hasV && hasA;
-        }
-
         return VALID_EXTS.has((f.ext || "").toLowerCase()) || hasV || hasA;
       })
       .forEach((f) => {
@@ -320,19 +317,14 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE ULTIMATE MASTER OVERRIDE FOR FACEBOOK/INSTAGRAM 🔥
+  // 🔥 THE FINAL AUDIO MERGE LOGIC 🔥
+  // We trust the frontend. If hasAudio is false (which it usually is for HD Facebook videos),
+  // we force yt-dlp to natively merge the best audio track into it.
   let formatStr;
-  if (platform === "facebook" || platform === "instagram") {
-    // Hum frontend ke format_id ko ignore kar rahe hain kyunki wo silent ho sakta hai.
-    // Hum yt-dlp ko force kar rahe hain: "Sirf wahi best format laao jisme Video aur Audio pehle se MERGED hain!"
-    formatStr = "best[vcodec!=none][acodec!=none]/b[ext=mp4]/best";
+  if (hasAudio === "true") {
+    formatStr = `${format_id}/bv*+ba/b`;
   } else {
-    // YouTube ke liye normal logic chalega
-    if (hasAudio === "true") {
-      formatStr = `${format_id}/bv*+ba/b`;
-    } else {
-      formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/bv*+ba/b`;
-    }
+    formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/bv*+ba/b`;
   }
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -356,9 +348,11 @@ const downloadMedia = async (req, res) => {
 
   try {
     console.log(
-      `⬇️  Downloading [${platform}] with Master Override format="${formatStr}"`,
+      `⬇️  Downloading [${platform}] format="${formatStr}" | hasAudio=${hasAudio}`,
     );
 
+    // No postprocessorArgs here! We let yt-dlp do a native '-c copy' merge
+    // which uses virtually zero RAM and keeps the server perfectly stable.
     await withRetry(() =>
       youtubedl(targetUrl, {
         ...options,
