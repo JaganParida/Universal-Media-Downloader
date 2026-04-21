@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const youtubedl = require("youtube-dl-exec");
 const path = require("path"); // File path handle karne ke liye
+const ffmpeg = require("ffmpeg-static");
 
 const app = express();
 app.use(cors());
@@ -37,6 +38,7 @@ app.post("/api/info", async (req, res) => {
       preferFreeFormats: true,
       // Yahan humne exact file ka naam daal diya hai
       cookies: path.join(__dirname, "www.youtube.com_cookies.txt"),
+      ffmpegLocation: ffmpeg,
     });
 
     const videoInfo = {
@@ -90,6 +92,7 @@ app.get("/api/download", async (req, res) => {
       noWarnings: true,
       // Yahan bhi cookies set kar di hain
       cookies: path.join(__dirname, "www.youtube.com_cookies.txt"),
+      ffmpegLocation: ffmpeg,
     });
 
     subprocess.stdout.pipe(res);
