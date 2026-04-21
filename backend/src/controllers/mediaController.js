@@ -1,5 +1,3 @@
-// File: src/controllers/mediaController.js
-
 const youtubedl = require("youtube-dl-exec");
 const path = require("path");
 const ffmpeg = require("ffmpeg-static");
@@ -22,7 +20,7 @@ const getMediaInfo = async (req, res) => {
     });
 
     const uniqueFormats = new Map();
-    const durationSec = output.duration; // Extract duration in seconds for calculation
+    const durationSec = output.duration || 0;
 
     output.formats
       .filter((f) => f.ext === "mp4" || f.ext === "m4a")
@@ -30,51 +28,63 @@ const getMediaInfo = async (req, res) => {
         let cleanRes = "Audio";
         let sortValue = 0;
 
-        // 1. Resolution Cleaning Logic
         if (f.vcodec !== "none") {
-          const resString = f.resolution || "";
-          let height = f.height;
+          let w = f.width || 0;
+          let h = f.height || 0;
 
-          if (!height && resString.includes("x")) {
-            const parts = resString.split("x").map(Number);
-            height = Math.min(...parts); // Best fit for vertical videos
+          if (!w && !h && f.resolution && f.resolution.includes("x")) {
+            const parts = f.resolution.split("x").map(Number);
+            w = parts[0];
+            h = parts[1];
           }
 
-          if (height && !isNaN(height)) {
-            cleanRes = `${height}p`;
-            sortValue = height;
+          if (!w && h) w = h;
+          if (!h && w) h = w;
+
+          let shortEdge = Math.min(w, h);
+
+          // Strict Standard Resolution Bucketing
+          if (shortEdge >= 1000) {
+            cleanRes = "1080p";
+            sortValue = 1080;
+          } else if (shortEdge >= 700) {
+            cleanRes = "720p";
+            sortValue = 720;
+          } else if (shortEdge >= 480) {
+            cleanRes = "480p";
+            sortValue = 480;
+          } else if (shortEdge >= 360) {
+            cleanRes = "360p";
+            sortValue = 360;
+          } else if (shortEdge >= 240) {
+            cleanRes = "240p";
+            sortValue = 240;
+          } else if (shortEdge > 0) {
+            cleanRes = "144p";
+            sortValue = 144;
           } else {
-            cleanRes = "HQ Video";
-            sortValue = 999;
+            cleanRes = "Video";
+            sortValue = 100;
           }
         }
 
-        // 2. The Ultimate "Approximate Size" Calculator Logic
         let sizeString = "";
-        let sizeValueForSort = 0; // To help pick the best format later
+        let sizeValueForSort = 0;
 
         if (f.filesize) {
-          // Exact size available
           sizeString = `${(f.filesize / 1048576).toFixed(1)} MB`;
           sizeValueForSort = f.filesize;
         } else if (f.filesize_approx) {
-          // Platform gave approximate size
-          sizeString = `~ ${(f.filesize_approx / 1048576).toFixed(1)} MB`;
+          sizeString = `~${(f.filesize_approx / 1048576).toFixed(1)} MB`;
           sizeValueForSort = f.filesize_approx;
         } else if (f.tbr && durationSec) {
-          // MATHEMATICAL HACK: Size = (Total Bitrate in kbps * 1000 * duration in sec) / 8
           const estBytes = (f.tbr * 1000 * durationSec) / 8;
-          sizeString = `~ ${(estBytes / 1048576).toFixed(1)} MB`;
+          sizeString = `~${(estBytes / 1048576).toFixed(1)} MB`;
           sizeValueForSort = estBytes;
-        } else {
-          // Fallback for UI if absolutely nothing works
-          sizeString = "Approx Size";
-          sizeValueForSort = 0;
         }
 
-        const key = cleanRes + (f.vcodec === "none" ? "_audio" : "_video");
+        const key = cleanRes;
 
-        // 3. Keep only the best format for each resolution
         if (!uniqueFormats.has(key)) {
           uniqueFormats.set(key, {
             ...f,
@@ -84,8 +94,7 @@ const getMediaInfo = async (req, res) => {
             sizeValueForSort,
           });
         } else {
-          // If we found a format with better size data, replace the old one
-          if (!uniqueFormats.get(key).sizeValueForSort && sizeValueForSort) {
+          if (sizeValueForSort > uniqueFormats.get(key).sizeValueForSort) {
             uniqueFormats.set(key, {
               ...f,
               cleanRes,
@@ -108,12 +117,14 @@ const getMediaInfo = async (req, res) => {
         hasVideo: f.vcodec !== "none",
       }))
       .sort((a, b) => {
-        if (a.hasVideo && b.hasVideo) return b.sortValue - a.sortValue; // Highest res first
-        return b.hasVideo ? 1 : -1; // Videos before audio
+        if (a.hasVideo && b.hasVideo) return b.sortValue - a.sortValue;
+        return b.hasVideo ? 1 : -1;
       });
 
+    // ADDED DESCRIPTION HERE
     const videoInfo = {
       title: output.title || "Social Media Video",
+      description: output.description || "",
       thumbnail: output.thumbnail || null,
       formats: cleanFormats,
     };
@@ -121,9 +132,9 @@ const getMediaInfo = async (req, res) => {
     res.json(videoInfo);
   } catch (error) {
     console.error("Fetch error:", error.message);
-    res.status(500).json({
-      error: "Could not fetch media. Make sure it is a public link.",
-    });
+    res
+      .status(500)
+      .json({ error: "Could not fetch media. Make sure it is a public link." });
   }
 };
 
@@ -150,18 +161,12 @@ const downloadMedia = async (req, res) => {
     });
 
     res.download(tempFilePath, `${safeTitle}.mp4`, (err) => {
-      if (fs.existsSync(tempFilePath)) {
-        fs.unlinkSync(tempFilePath);
-      }
+      if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     });
   } catch (error) {
-    console.error("Download processing error:", error.message);
-    if (fs.existsSync(tempFilePath)) {
-      fs.unlinkSync(tempFilePath);
-    }
-    if (!res.headersSent) {
-      res.status(500).send("Failed to process the media file.");
-    }
+    console.error("Download error:", error.message);
+    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+    if (!res.headersSent) res.status(500).send("Failed to process.");
   }
 };
 
