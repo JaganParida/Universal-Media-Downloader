@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const youtubedl = require("youtube-dl-exec");
+const path = require("path"); // File path handle karne ke liye
 
 const app = express();
 app.use(cors());
@@ -27,7 +28,6 @@ app.post("/api/info", async (req, res) => {
   if (!url) return res.status(400).json({ error: "URL is required" });
 
   try {
-    // Clean the URL before processing
     const targetUrl = cleanUrl(url);
 
     const output = await youtubedl(targetUrl, {
@@ -35,14 +35,14 @@ app.post("/api/info", async (req, res) => {
       noCheckCertificates: true,
       noWarnings: true,
       preferFreeFormats: true,
-      forceIpv4: true,
+      // Yahan humne exact file ka naam daal diya hai
+      cookies: path.join(__dirname, "www.youtube.com_cookies.txt"),
     });
 
     const videoInfo = {
       title: output.title,
       thumbnail: output.thumbnail,
       duration: output.duration_string,
-      // Filter out junk formats and only keep useful video/audio streams
       formats: output.formats
         .filter((f) => f.ext === "mp4" || f.ext === "m4a")
         .map((f) => ({
@@ -55,7 +55,6 @@ app.post("/api/info", async (req, res) => {
           hasAudio: f.acodec !== "none",
           hasVideo: f.vcodec !== "none",
         }))
-        // Prioritize formats that have BOTH video and audio built-in
         .sort((a, b) => (b.hasAudio && b.hasVideo ? 1 : -1)),
     };
 
@@ -78,28 +77,21 @@ app.get("/api/download", async (req, res) => {
     return res.status(400).send("Missing URL or Format ID");
   }
 
-  // Clean the title so it's safe for a filename
   const safeTitle = (title || "download").replace(/[^\w\s-]/gi, "");
-
-  // Force the browser to download the file instead of playing it
   res.header("Content-Disposition", `attachment; filename="${safeTitle}.mp4"`);
 
   try {
-    // Clean the URL here as well to ensure the download doesn't fail
     const targetUrl = cleanUrl(url);
 
-    // Execute yt-dlp and pipe the output DIRECTLY to the response
-    // This prevents the server from running out of disk space or RAM!
     const subprocess = youtubedl.exec(targetUrl, {
       format: format_id,
-      output: "-", // Tells yt-dlp to output to standard output
+      output: "-",
       noCheckCertificates: true,
       noWarnings: true,
-      forceIpv4: true,
-      cookiesFromBrowser: "opera",
+      // Yahan bhi cookies set kar di hain
+      cookies: path.join(__dirname, "www.youtube.com_cookies.txt"),
     });
 
-    // Pipe the download stream directly to the user's browser
     subprocess.stdout.pipe(res);
 
     subprocess.stderr.on("data", (data) => {
