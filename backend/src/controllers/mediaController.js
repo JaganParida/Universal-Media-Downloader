@@ -39,9 +39,7 @@ const BASE = {
   noPlaylist: true,
   bufferSize: "16K",
   concurrentFragments: 4,
-  // 🔥 SOUND FIX: Force yt-dlp to prioritize MP4/M4A formats
-  formatSort: "res,ext:mp4:m4a",
-  // 🔥 SOUND FIX: Force FFMPEG to output a strict MP4 file (fixes MKV silent bugs)
+  // FFMPEG ko force karna ki wo end mein pakka MP4 hi banaye, chahe koi bhi audio format ho
   remuxVideo: "mp4",
 };
 
@@ -265,14 +263,13 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE ULTIMATE AUDIO CORRUPTION FIX 🔥
-  let formatStr = "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b";
+  // 🔥 THE ULTIMATE AUDIO CORRUPTION FIX (NO EXTENSION RESTRICTIONS) 🔥
+  let formatStr = "bestvideo+bestaudio/best"; // Default: Sabse badhiya quality
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // 1. Try requesting format + strictly M4A audio (guarantees perfect MP4)
-    // 2. Try requesting format + any audio
-    // 3. Fallback to just the requested format
-    formatStr = `${format_id}+ba[ext=m4a]/${format_id}+ba/${format_id}`;
+    // Agar user ne quality select ki hai (e.g., 1080p), toh wahi video + jo bhi audio available ho usko merge karo
+    // Agar merge fail hota hai, toh seedha Pre-merged video uthao ('b')
+    formatStr = `${format_id}+bestaudio/b`;
   }
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -298,7 +295,7 @@ const downloadMedia = async (req, res) => {
         ...options,
         format: formatStr,
         output: tempFilePath,
-        mergeOutputFormat: "mp4",
+        mergeOutputFormat: "mp4", // Yeh fix karega FFMPEG ko
       }),
     );
 
