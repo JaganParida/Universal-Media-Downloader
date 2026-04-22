@@ -36,13 +36,12 @@ const normalizeYouTubeUrl = (url) => {
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
-  noWarnings: true,
-  retries: 10,
-  fragmentRetries: 10,
+  noWarnings: false, // 🔴 LOG FLAG: Warnings ON rakhi hain taki agar FB audio block kare toh logs mein dikhe
+  retries: 5,
+  fragmentRetries: 5,
   socketTimeout: 60,
   noPlaylist: true,
   bufferSize: "16K",
-  concurrentFragments: 4,
 };
 
 const PLATFORM_OPTIONS = {
@@ -51,24 +50,9 @@ const PLATFORM_OPTIONS = {
     extractorArgs: "youtube:player_client=web",
     geoBypass: true,
   },
-  facebook: {
-    ...BASE,
-    geoBypass: true,
-    // 🔥 THE MOBILE HACK: Send a Mobile User-Agent to trick Facebook into sending pre-merged MP4s
-    addHeader: [
-      "user-agent:Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
-      "accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-      "accept-language:en-US,en;q=0.9",
-    ],
-  },
-  instagram: {
-    ...BASE,
-    geoBypass: true,
-  },
-  generic: {
-    ...BASE,
-    geoBypass: true,
-  },
+  facebook: { ...BASE, geoBypass: false }, // FB ke liye geoBypass false kiya hai taki X-Forwarded-For block na ho
+  instagram: { ...BASE, geoBypass: true },
+  generic: { ...BASE, geoBypass: true },
 };
 
 const getPlatformOptions = (platform) =>
@@ -130,12 +114,9 @@ const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
     } catch (err) {
       lastError = err;
       console.error(`⚠️ [RETRY LOG] Attempt ${attempt} failed:`, err.message);
-      const msg = (err.message || "").toLowerCase();
-      const isTransient =
-        msg.includes("network") ||
-        msg.includes("timeout") ||
-        msg.includes("connection") ||
-        msg.includes("429");
+      const isTransient = /network|timeout|connection|429/i.test(
+        err.message || "",
+      );
       if (!isTransient || attempt === maxAttempts) throw err;
       await new Promise((r) => setTimeout(r, delay * attempt));
     }
@@ -150,17 +131,11 @@ const findTempFile = (basePath) => {
   const base = path.basename(basePath, path.extname(basePath));
   try {
     const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
-    const finalFile = files.find((f) => {
-      if (f.endsWith(".part") || f.endsWith(".ytdl")) return false;
-      if (f.includes(".f") && /\d/.test(f)) return false;
-      return true;
-    });
-    if (finalFile) {
-      return path.join(dir, finalFile);
-    }
-  } catch (err) {
-    console.error("❌ [TEMP FILE LOG] Error:", err);
-  }
+    const finalFile = files.find(
+      (f) => !f.endsWith(".part") && !f.endsWith(".ytdl") && !/\.f\d/.test(f),
+    );
+    if (finalFile) return path.join(dir, finalFile);
+  } catch (err) {}
   return null;
 };
 
@@ -168,33 +143,20 @@ const findTempFile = (basePath) => {
 
 const getMediaInfo = async (req, res) => {
   const { url } = req.body;
-
   if (!url) return res.status(400).json({ error: "URL is required" });
 
   try {
     let targetUrl = cleanUrl(url);
     const platform = detectPlatform(targetUrl);
-
-    if (platform === "youtube") {
-      targetUrl = normalizeYouTubeUrl(targetUrl);
-    } else if (platform === "facebook") {
-      // 🔥 THE MOBILE URL HACK 🔥
-      // Forcing mobile facebook bypasses the DASH audio block.
-      targetUrl = targetUrl.replace(
-        /www\.facebook\.com|facebook\.com/i,
-        "m.facebook.com",
-      );
-    }
+    if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
 
     const options = getPlatformOptions(platform);
-
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
     );
 
     const durationSec = output.duration || 0;
     const formats = Array.isArray(output.formats) ? output.formats : [];
-
     const VALID_EXTS = new Set(["mp4", "m4a", "webm", "mkv"]);
     const uniqueFormats = new Map();
 
@@ -296,40 +258,27 @@ const downloadMedia = async (req, res) => {
   console.log("\n==========================================");
   console.log("🚀 [DOWNLOAD API] INITIALIZING DOWNLOAD...");
 
-  if (!url) {
-    return res.status(400).send("Missing URL");
-  }
+  if (!url) return res.status(400).send("Missing URL");
 
   const safeTitle =
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
   let targetUrl = cleanUrl(url);
   const platform = detectPlatform(targetUrl);
 
-  if (platform === "youtube") {
-    targetUrl = normalizeYouTubeUrl(targetUrl);
-  } else if (platform === "facebook") {
-    // 🔥 THE MOBILE URL HACK 🔥
-    console.log("🛠️ [DOWNLOAD API] Applying Facebook Mobile Bypass...");
-    targetUrl = targetUrl.replace(
-      /www\.facebook\.com|facebook\.com/i,
-      "m.facebook.com",
-    );
-  }
+  if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
 
   const options = getPlatformOptions(platform);
 
-  // Use the standard robust fallback
-  let formatStr = "bv*+ba/b";
-
+  // Clean, standard yt-dlp format merging logic
+  let formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
+    formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best`;
   }
 
   console.log(
     "🎯 [DOWNLOAD API] Final Format String passed to yt-dlp:",
     formatStr,
   );
-  console.log("🌐 [DOWNLOAD API] Final Target URL:", targetUrl);
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
@@ -354,15 +303,13 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      verbose: true,
+      verbose: true, // Print errors so we can catch Facebook 403s!
     };
 
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions));
 
     const actualFile = findTempFile(tempFilePath);
-    if (!actualFile) {
-      throw new Error("Output file was not created by yt-dlp.");
-    }
+    if (!actualFile) throw new Error("Output file was not created by yt-dlp.");
 
     const stat = fs.statSync(actualFile);
     console.log(
@@ -395,15 +342,13 @@ const downloadMedia = async (req, res) => {
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
 
-    stream.on("error", (err) => cleanup());
+    stream.on("error", () => cleanup());
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
   } catch (error) {
     console.error("❌ Download error:", error.message);
     cleanup();
-    if (!res.headersSent) {
-      res.status(500).send(friendlyError(error.message));
-    }
+    if (!res.headersSent) res.status(500).send(friendlyError(error.message));
   }
 };
 
