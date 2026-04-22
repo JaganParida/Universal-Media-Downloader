@@ -36,7 +36,7 @@ const normalizeYouTubeUrl = (url) => {
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
-  noWarnings: false, // 🔴 LOG FLAG: Set to false so we can see yt-dlp warnings in console
+  noWarnings: true, // ✅ FIXED: Wapas true kar diya taki --no-no-warnings wala crash na aaye
   retries: 10,
   fragmentRetries: 10,
   socketTimeout: 60,
@@ -194,7 +194,6 @@ const getMediaInfo = async (req, res) => {
     const durationSec = output.duration || 0;
     const formats = Array.isArray(output.formats) ? output.formats : [];
 
-    // 🔴 LOG FLAG: Check if the raw formats actually have audio
     const formatsWithAudio = formats.filter(
       (f) => f.acodec && f.acodec !== "none",
     ).length;
@@ -328,7 +327,6 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔴 LOG FLAG: CRITICAL - Verify FFmpeg is actually present where expected
   console.log("⚙️ [DOWNLOAD API] FFmpeg Path config:", options.ffmpegLocation);
   if (!fs.existsSync(options.ffmpegLocation)) {
     console.error(
@@ -342,6 +340,7 @@ const downloadMedia = async (req, res) => {
     console.log("✅ [DOWNLOAD API] FFmpeg binary found successfully.");
   }
 
+  // Yahi format string pehle Facebook ka audio issue theek karegi
   let formatStr = "bv*+ba/b";
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
@@ -378,13 +377,12 @@ const downloadMedia = async (req, res) => {
   try {
     console.log(`⏳ [DOWNLOAD API] Calling yt-dlp to download and merge...`);
 
-    // 🔴 LOG FLAG: Setting verbose to true to force yt-dlp to output detailed logs
     const ytdlpOptions = {
       ...options,
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      verbose: true, // This will print FFmpeg merge logs
+      verbose: true,
     };
 
     console.log("🛠️ [DOWNLOAD API] yt-dlp Options:", ytdlpOptions);
