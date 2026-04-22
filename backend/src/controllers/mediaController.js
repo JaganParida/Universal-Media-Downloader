@@ -39,6 +39,10 @@ const BASE = {
   noPlaylist: true,
   bufferSize: "16K",
   concurrentFragments: 4,
+  // 🔥 SOUND FIX: Force yt-dlp to prioritize MP4/M4A formats
+  formatSort: "res,ext:mp4:m4a",
+  // 🔥 SOUND FIX: Force FFMPEG to output a strict MP4 file (fixes MKV silent bugs)
+  remuxVideo: "mp4",
 };
 
 const PLATFORM_OPTIONS = {
@@ -47,7 +51,7 @@ const PLATFORM_OPTIONS = {
     extractorArgs: "youtube:player_client=web",
     geoBypass: true,
   },
-  facebook: { ...BASE, geoBypass: true }, // Saari spoofing aur nautanki hata di
+  facebook: { ...BASE, geoBypass: true },
   instagram: { ...BASE, geoBypass: true },
   generic: { ...BASE, geoBypass: true },
 };
@@ -261,14 +265,14 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE ULTIMATE FACEBOOK SOUND FIX 🔥
-  let formatStr = "bv*+ba/b";
+  // 🔥 THE ULTIMATE AUDIO CORRUPTION FIX 🔥
+  let formatStr = "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b";
 
-  if (platform === "facebook") {
-    // Agar platform Facebook hai, chilla ke yt-dlp ko bolo "Mujhe pre-merged file de jisme audio aur video ek sath ho!"
-    formatStr = "b";
-  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+ba/bv*+ba/b`;
+  if (format_id && format_id !== "best" && format_id !== "undefined") {
+    // 1. Try requesting format + strictly M4A audio (guarantees perfect MP4)
+    // 2. Try requesting format + any audio
+    // 3. Fallback to just the requested format
+    formatStr = `${format_id}+ba[ext=m4a]/${format_id}+ba/${format_id}`;
   }
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
