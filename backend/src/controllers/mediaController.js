@@ -54,6 +54,10 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: true,
+    // 🚨 Add a generic browser User-Agent so Facebook doesn't block the audio stream
+    addHeader: [
+      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ],
   },
   instagram: {
     ...BASE,
@@ -301,10 +305,12 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🔥 ULTIMATE FACEBOOK AUDIO FIX 🔥
-    // Bypass all DASH stream merging. We explicitly demand Facebook's native 'hd' format first.
-    // If 'hd' is missing, it falls back to 'sd', which is also guaranteed to have audio.
-    formatStr = "hd/sd/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best";
+    // 🚨 BRAHMASTRA FACEBOOK FIX 🚨
+    // We STRICTLY force yt-dlp to ONLY select a single file that has BOTH video AND audio.
+    // [vcodec!=none] -> means video codec must exist.
+    // [acodec!=none] -> means audio codec must exist.
+    // This absolutely guarantees that the downloaded file contains audio natively!
+    formatStr = "best[vcodec!=none][acodec!=none]/best";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     // YouTube / Instagram Standard Merging
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
