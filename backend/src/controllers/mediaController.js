@@ -31,12 +31,12 @@ const normalizeYouTubeUrl = (url) => {
   return url;
 };
 
-// ─── BASE OPTIONS (No Custom FB/IG Headers to prevent blocking) ───
+// ─── BASE OPTIONS ───
 
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
-  noWarnings: true, // ✅ FIXED: Wapas true kar diya taki --no-no-warnings wala crash na aaye
+  noWarnings: true,
   retries: 10,
   fragmentRetries: 10,
   socketTimeout: 60,
@@ -144,24 +144,16 @@ const findTempFile = (basePath) => {
   const base = path.basename(basePath, path.extname(basePath));
   try {
     const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
-    console.log(
-      "🕵️ [TEMP FILE LOG] Files found in temp dir matching base:",
-      files,
-    );
     const finalFile = files.find((f) => {
       if (f.endsWith(".part") || f.endsWith(".ytdl")) return false;
       if (f.includes(".f") && /\d/.test(f)) return false;
       return true;
     });
     if (finalFile) {
-      console.log(
-        "✅ [TEMP FILE LOG] Final merged file identified:",
-        finalFile,
-      );
       return path.join(dir, finalFile);
     }
   } catch (err) {
-    console.error("❌ [TEMP FILE LOG] Error reading temp directory:", err);
+    console.error("❌ [TEMP FILE LOG] Error:", err);
   }
   return null;
 };
@@ -170,22 +162,18 @@ const findTempFile = (basePath) => {
 
 const getMediaInfo = async (req, res) => {
   const { url } = req.body;
-  console.log("\n==========================================");
-  console.log("ℹ️ [INFO API] Request received for URL:", url);
 
   if (!url) return res.status(400).json({ error: "URL is required" });
 
   try {
     let targetUrl = cleanUrl(url);
     const platform = detectPlatform(targetUrl);
-    console.log("ℹ️ [INFO API] Detected Platform:", platform);
 
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
     }
 
     const options = getPlatformOptions(platform);
-    console.log("ℹ️ [INFO API] Fetching metadata via yt-dlp...");
 
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
@@ -193,13 +181,6 @@ const getMediaInfo = async (req, res) => {
 
     const durationSec = output.duration || 0;
     const formats = Array.isArray(output.formats) ? output.formats : [];
-
-    const formatsWithAudio = formats.filter(
-      (f) => f.acodec && f.acodec !== "none",
-    ).length;
-    console.log(
-      `ℹ️ [INFO API] Total Formats: ${formats.length} | Formats with Audio track: ${formatsWithAudio}`,
-    );
 
     const VALID_EXTS = new Set(["mp4", "m4a", "webm", "mkv"]);
     const uniqueFormats = new Map();
@@ -281,9 +262,6 @@ const getMediaInfo = async (req, res) => {
               : 0,
       );
 
-    console.log(
-      "✅ [INFO API] Successfully parsed formats. Returning to client.",
-    );
     return res.json({
       title: output.title || "Video",
       description: output.description || "",
@@ -293,7 +271,6 @@ const getMediaInfo = async (req, res) => {
       formats: cleanFormats,
     });
   } catch (error) {
-    console.error("❌ [INFO API] Error:", error.message);
     return res.status(500).json({ error: friendlyError(error.message) });
   }
 };
@@ -305,12 +282,8 @@ const downloadMedia = async (req, res) => {
 
   console.log("\n==========================================");
   console.log("🚀 [DOWNLOAD API] INITIALIZING DOWNLOAD...");
-  console.log("➡️ URL:", url);
-  console.log("➡️ Requested format_id:", format_id);
-  console.log("➡️ Title:", title);
 
   if (!url) {
-    console.error("❌ [DOWNLOAD API] Missing URL");
     return res.status(400).send("Missing URL");
   }
 
@@ -319,32 +292,30 @@ const downloadMedia = async (req, res) => {
   let targetUrl = cleanUrl(url);
   const platform = detectPlatform(targetUrl);
 
-  console.log("🔍 [DOWNLOAD API] Platform detected:", platform);
-
   if (platform === "youtube") {
     targetUrl = normalizeYouTubeUrl(targetUrl);
   }
 
   const options = getPlatformOptions(platform);
 
-  console.log("⚙️ [DOWNLOAD API] FFmpeg Path config:", options.ffmpegLocation);
-  if (!fs.existsSync(options.ffmpegLocation)) {
-    console.error(
-      "🚨🚨🚨 [CRITICAL ERROR] FFmpeg binary NOT FOUND at:",
-      options.ffmpegLocation,
-    );
-    console.error(
-      "🚨 If FFmpeg is missing, yt-dlp CANNOT merge audio and video!",
-    );
-  } else {
-    console.log("✅ [DOWNLOAD API] FFmpeg binary found successfully.");
-  }
-
-  // Yahi format string pehle Facebook ka audio issue theek karegi
   let formatStr = "bv*+ba/b";
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
+    if (platform === "facebook") {
+      // 🚨 FACEBOOK SPECIAL FIX 🚨
+      // Agar format_id 'hd' ya 'sd' hai toh usey directly use karo,
+      // Varna DASH video (eg: 12345v) ke liye sirf MERGE (+ba) try karo.
+      // Silent video (middle fallback) ko hata diya gaya hai.
+      if (format_id === "hd" || format_id === "sd") {
+        formatStr = `${format_id}/b`;
+      } else {
+        // Sirf 2 option: Ya toh Audio ke sath merge karo, nahi toh best combined stream utha lo
+        formatStr = `${format_id}+ba/bv*+ba/b`;
+      }
+    } else {
+      // YouTube / Instagram ke liye standard fallback
+      formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
+    }
   }
 
   console.log(
@@ -355,8 +326,6 @@ const downloadMedia = async (req, res) => {
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
 
-  console.log("📁 [DOWNLOAD API] Target Temp Output File:", tempFilePath);
-
   const cleanup = () => {
     try {
       const dir = path.dirname(tempFilePath);
@@ -366,17 +335,12 @@ const downloadMedia = async (req, res) => {
         .forEach((f) => {
           try {
             fs.unlinkSync(path.join(dir, f));
-            console.log("🧹 [CLEANUP] Deleted temp file:", f);
           } catch (_) {}
         });
-    } catch (e) {
-      console.error("❌ [CLEANUP] Error during cleanup:", e);
-    }
+    } catch (e) {}
   };
 
   try {
-    console.log(`⏳ [DOWNLOAD API] Calling yt-dlp to download and merge...`);
-
     const ytdlpOptions = {
       ...options,
       format: formatStr,
@@ -385,19 +349,10 @@ const downloadMedia = async (req, res) => {
       verbose: true,
     };
 
-    console.log("🛠️ [DOWNLOAD API] yt-dlp Options:", ytdlpOptions);
-
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions));
-
-    console.log(
-      "✅ [DOWNLOAD API] yt-dlp execution completed without throwing error.",
-    );
 
     const actualFile = findTempFile(tempFilePath);
     if (!actualFile) {
-      console.error(
-        "🚨 [DOWNLOAD API] actualFile is null! yt-dlp failed to create the file.",
-      );
       throw new Error("Output file was not created by yt-dlp.");
     }
 
@@ -407,7 +362,6 @@ const downloadMedia = async (req, res) => {
     );
 
     if (stat.size === 0) {
-      console.error("🚨 [DOWNLOAD API] File size is 0 bytes!");
       cleanup();
       throw new Error(
         "Downloaded file is empty. The video may be unavailable.",
@@ -423,8 +377,6 @@ const downloadMedia = async (req, res) => {
       mp3: "audio/mpeg",
     };
 
-    console.log("🚀 [DOWNLOAD API] Piping file to client response stream...");
-
     res.setHeader("Content-Type", mimeTypes[ext] || "video/mp4");
     res.setHeader("Content-Length", stat.size);
     res.setHeader(
@@ -435,21 +387,11 @@ const downloadMedia = async (req, res) => {
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
 
-    stream.on("error", (err) => {
-      console.error("❌ [STREAM ERROR] Stream failed:", err);
-      cleanup();
-    });
-    res.on("finish", () => {
-      console.log(
-        "✅ [DOWNLOAD API] Download finished successfully. Cleaning up...",
-      );
-      cleanup();
-    });
+    stream.on("error", (err) => cleanup());
+    res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
   } catch (error) {
-    console.error("\n🚨🚨🚨 [FATAL DOWNLOAD ERROR] 🚨🚨🚨");
-    console.error("Message:", error.message);
-    console.error("Stack Trace:", error.stack);
+    console.error("❌ Download error:", error.message);
     cleanup();
     if (!res.headersSent) {
       res.status(500).send(friendlyError(error.message));
