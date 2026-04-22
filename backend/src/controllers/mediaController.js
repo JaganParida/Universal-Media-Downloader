@@ -54,9 +54,11 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: true,
-    // 🚨 Add a generic browser User-Agent so Facebook doesn't block the audio stream
+    // 🔥 THE MOBILE HACK: Send a Mobile User-Agent to trick Facebook into sending pre-merged MP4s
     addHeader: [
-      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "user-agent:Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
+      "accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "accept-language:en-US,en;q=0.9",
     ],
   },
   instagram: {
@@ -175,6 +177,13 @@ const getMediaInfo = async (req, res) => {
 
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
+    } else if (platform === "facebook") {
+      // 🔥 THE MOBILE URL HACK 🔥
+      // Forcing mobile facebook bypasses the DASH audio block.
+      targetUrl = targetUrl.replace(
+        /www\.facebook\.com|facebook\.com/i,
+        "m.facebook.com",
+      );
     }
 
     const options = getPlatformOptions(platform);
@@ -298,21 +307,21 @@ const downloadMedia = async (req, res) => {
 
   if (platform === "youtube") {
     targetUrl = normalizeYouTubeUrl(targetUrl);
+  } else if (platform === "facebook") {
+    // 🔥 THE MOBILE URL HACK 🔥
+    console.log("🛠️ [DOWNLOAD API] Applying Facebook Mobile Bypass...");
+    targetUrl = targetUrl.replace(
+      /www\.facebook\.com|facebook\.com/i,
+      "m.facebook.com",
+    );
   }
 
   const options = getPlatformOptions(platform);
 
+  // Use the standard robust fallback
   let formatStr = "bv*+ba/b";
 
-  if (platform === "facebook") {
-    // 🚨 BRAHMASTRA FACEBOOK FIX 🚨
-    // We STRICTLY force yt-dlp to ONLY select a single file that has BOTH video AND audio.
-    // [vcodec!=none] -> means video codec must exist.
-    // [acodec!=none] -> means audio codec must exist.
-    // This absolutely guarantees that the downloaded file contains audio natively!
-    formatStr = "best[vcodec!=none][acodec!=none]/best";
-  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // YouTube / Instagram Standard Merging
+  if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
@@ -320,6 +329,7 @@ const downloadMedia = async (req, res) => {
     "🎯 [DOWNLOAD API] Final Format String passed to yt-dlp:",
     formatStr,
   );
+  console.log("🌐 [DOWNLOAD API] Final Target URL:", targetUrl);
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
