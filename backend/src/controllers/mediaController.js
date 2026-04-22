@@ -8,8 +8,6 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// ─── Platform Detection ───────────────────────────────────────────────────────
-
 const detectPlatform = (url) => {
   if (/instagram\.com/i.test(url)) return "instagram";
   if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) return "facebook";
@@ -18,8 +16,6 @@ const detectPlatform = (url) => {
   if (/tiktok\.com/i.test(url)) return "tiktok";
   return "generic";
 };
-
-// ─── URL Normalizers (Magic Fix for Shortlinks) ───
 
 const normalizeYouTubeUrl = (url) => {
   try {
@@ -32,22 +28,7 @@ const normalizeYouTubeUrl = (url) => {
   return url;
 };
 
-const normalizeFacebookUrl = (url) => {
-  try {
-    const u = new URL(url);
-    // Convert /share/r/ID to direct reel link to bypass redirect blocks
-    const reelMatch = u.pathname.match(/^\/share\/r\/([a-zA-Z0-9_-]+)/);
-    if (reelMatch) return `https://www.facebook.com/reel/${reelMatch[1]}`;
-
-    // Convert /share/v/ID to direct watch link
-    const watchMatch = u.pathname.match(/^\/share\/v\/([a-zA-Z0-9_-]+)/);
-    if (watchMatch) return `https://www.facebook.com/watch?v=${watchMatch[1]}`;
-  } catch (_) {}
-  return url;
-};
-
-// ─── BASE OPTIONS ───
-
+// ─── PURE & CLEAN BASE OPTIONS ───
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
@@ -66,32 +47,13 @@ const PLATFORM_OPTIONS = {
     extractorArgs: "youtube:player_client=web",
     geoBypass: true,
   },
-  facebook: {
-    ...BASE,
-    forceIpv4: true,
-    geoBypass: true,
-    // Mobile Safari Spoofing: Reels strictly check for mobile browsers
-    addHeader: [
-      "User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-      "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language:en-US,en;q=0.5",
-    ],
-  },
-  instagram: {
-    ...BASE,
-    forceIpv4: true,
-    geoBypass: true,
-    addHeader: [
-      "User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-    ],
-  },
+  facebook: { ...BASE, geoBypass: true }, // Saari spoofing aur nautanki hata di
+  instagram: { ...BASE, geoBypass: true },
   generic: { ...BASE, geoBypass: true },
 };
 
 const getPlatformOptions = (platform) =>
   PLATFORM_OPTIONS[platform] ?? PLATFORM_OPTIONS.generic;
-
-// ─── Resolution Bucketing ───
 
 const bucketResolution = (width, height) => {
   const short = Math.min(width || 0, height || 0);
@@ -156,7 +118,6 @@ const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
   throw lastError;
 };
 
-// ─── TEMP FILE FINDER ───
 const findTempFile = (basePath) => {
   if (fs.existsSync(basePath)) return basePath;
   const dir = path.dirname(basePath);
@@ -182,12 +143,7 @@ const getMediaInfo = async (req, res) => {
   try {
     let targetUrl = cleanUrl(url);
     const platform = detectPlatform(targetUrl);
-
-    if (platform === "youtube") {
-      targetUrl = normalizeYouTubeUrl(targetUrl);
-    } else if (platform === "facebook") {
-      targetUrl = normalizeFacebookUrl(targetUrl); // ✅ FACEBOOK SHORTLINK BYPASS
-    }
+    if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
 
     const options = getPlatformOptions(platform);
 
@@ -301,24 +257,16 @@ const downloadMedia = async (req, res) => {
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
   let targetUrl = cleanUrl(url);
   const platform = detectPlatform(targetUrl);
-
-  if (platform === "youtube") {
-    targetUrl = normalizeYouTubeUrl(targetUrl);
-  } else if (platform === "facebook") {
-    targetUrl = normalizeFacebookUrl(targetUrl); // ✅ FACEBOOK SHORTLINK BYPASS
-  }
+  if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE ULTIMATE FACEBOOK REELS & VIDEO SOUND FIX 🔥
+  // 🔥 THE ULTIMATE FACEBOOK SOUND FIX 🔥
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}/b`;
-    } else {
-      formatStr = "b";
-    }
+    // Agar platform Facebook hai, chilla ke yt-dlp ko bolo "Mujhe pre-merged file de jisme audio aur video ek sath ho!"
+    formatStr = "b";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/bv*+ba/b`;
   }
@@ -341,8 +289,6 @@ const downloadMedia = async (req, res) => {
   };
 
   try {
-    console.log(`⬇️  Downloading [${platform}] natively format="${formatStr}"`);
-
     await withRetry(() =>
       youtubedl(targetUrl, {
         ...options,
@@ -382,11 +328,10 @@ const downloadMedia = async (req, res) => {
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
 
-    stream.on("error", (err) => cleanup());
+    stream.on("error", () => cleanup());
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
   } catch (error) {
-    console.error("❌ Download error:", error.message);
     cleanup();
     if (!res.headersSent) res.status(500).send(friendlyError(error.message));
   }
