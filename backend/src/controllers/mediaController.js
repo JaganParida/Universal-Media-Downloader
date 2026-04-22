@@ -8,6 +8,15 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
+// ─── MAGIC FIX FOR RENDER FFMPEG PERMISSIONS ───
+try {
+  if (fs.existsSync(ffmpegBin)) {
+    fs.chmodSync(ffmpegBin, 0o777); // Agar YouTube ke liye FFmpeg ki zarurat padi, toh Render use block nahi karega
+  }
+} catch (e) {
+  console.error("FFmpeg permission fix failed:", e);
+}
+
 const detectPlatform = (url) => {
   if (/instagram\.com/i.test(url)) return "instagram";
   if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) return "facebook";
@@ -28,6 +37,20 @@ const normalizeYouTubeUrl = (url) => {
   return url;
 };
 
+const normalizeFacebookUrl = (url) => {
+  try {
+    const u = new URL(url);
+    // Convert /share/r/ID to direct reel link to bypass redirect blocks
+    const reelMatch = u.pathname.match(/^\/share\/r\/([a-zA-Z0-9_-]+)/);
+    if (reelMatch) return `https://www.facebook.com/reel/${reelMatch[1]}`;
+
+    // Convert /share/v/ID to direct watch link
+    const watchMatch = u.pathname.match(/^\/share\/v\/([a-zA-Z0-9_-]+)/);
+    if (watchMatch) return `https://www.facebook.com/watch?v=${watchMatch[1]}`;
+  } catch (_) {}
+  return url;
+};
+
 // ─── PURE & CLEAN BASE OPTIONS ───
 const BASE = {
   ffmpegLocation: ffmpegBin,
@@ -39,7 +62,6 @@ const BASE = {
   noPlaylist: true,
   bufferSize: "16K",
   concurrentFragments: 4,
-  // FFMPEG ko force karna ki wo end mein pakka MP4 hi banaye, chahe koi bhi audio format ho
   remuxVideo: "mp4",
 };
 
@@ -145,7 +167,12 @@ const getMediaInfo = async (req, res) => {
   try {
     let targetUrl = cleanUrl(url);
     const platform = detectPlatform(targetUrl);
-    if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+
+    if (platform === "youtube") {
+      targetUrl = normalizeYouTubeUrl(targetUrl);
+    } else if (platform === "facebook") {
+      targetUrl = normalizeFacebookUrl(targetUrl);
+    }
 
     const options = getPlatformOptions(platform);
 
@@ -259,17 +286,25 @@ const downloadMedia = async (req, res) => {
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
   let targetUrl = cleanUrl(url);
   const platform = detectPlatform(targetUrl);
-  if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+
+  if (platform === "youtube") {
+    targetUrl = normalizeYouTubeUrl(targetUrl);
+  } else if (platform === "facebook") {
+    targetUrl = normalizeFacebookUrl(targetUrl);
+  }
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE ULTIMATE AUDIO CORRUPTION FIX (NO EXTENSION RESTRICTIONS) 🔥
-  let formatStr = "bestvideo+bestaudio/best"; // Default: Sabse badhiya quality
+  // 🔥 ABSOLUTE BULLETPROOF AUDIO FIX FOR FACEBOOK & INSTAGRAM 🔥
+  let formatStr = "bestvideo+bestaudio/best";
 
-  if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // Agar user ne quality select ki hai (e.g., 1080p), toh wahi video + jo bhi audio available ho usko merge karo
-    // Agar merge fail hota hai, toh seedha Pre-merged video uthao ('b')
-    formatStr = `${format_id}+bestaudio/b`;
+  if (platform === "facebook" || platform === "instagram") {
+    // Agar Facebook ya Insta hai, frontend ki demand ignore karo.
+    // Humesha Pre-Merged file download karo taaki FFmpeg ki zarurat hi na pade.
+    formatStr = "b";
+  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
+    // YouTube ke liye proper merging allow karo
+    formatStr = `${format_id}+bestaudio/best`;
   }
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -295,7 +330,7 @@ const downloadMedia = async (req, res) => {
         ...options,
         format: formatStr,
         output: tempFilePath,
-        mergeOutputFormat: "mp4", // Yeh fix karega FFMPEG ko
+        mergeOutputFormat: "mp4",
       }),
     );
 
