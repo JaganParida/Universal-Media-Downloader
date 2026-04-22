@@ -36,7 +36,7 @@ const normalizeYouTubeUrl = (url) => {
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
-  noWarnings: false, // 🔴 LOG FLAG: Warnings ON rakhi hain taki agar FB audio block kare toh logs mein dikhe
+  noWarnings: true, // ✅ FIXED: Ise wapas 'true' kar diya taki '--no-no-warnings' wala crash na aaye.
   retries: 5,
   fragmentRetries: 5,
   socketTimeout: 60,
@@ -50,7 +50,7 @@ const PLATFORM_OPTIONS = {
     extractorArgs: "youtube:player_client=web",
     geoBypass: true,
   },
-  facebook: { ...BASE, geoBypass: false }, // FB ke liye geoBypass false kiya hai taki X-Forwarded-For block na ho
+  facebook: { ...BASE, geoBypass: false },
   instagram: { ...BASE, geoBypass: true },
   generic: { ...BASE, geoBypass: true },
 };
@@ -269,10 +269,17 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // Clean, standard yt-dlp format merging logic
-  let formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
+  let formatStr = "bv*+ba/b";
+
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best`;
+    if (platform === "facebook") {
+      // ✅ FACEBOOK AUDIO FIX: Try merging requested video with audio.
+      // If it fails (due to blocked audio), it falls back directly to 'b' (best pre-merged file with audio).
+      // Ye us 1.10MB wali silent video ko download hone se rok dega.
+      formatStr = `${format_id}+ba/b`;
+    } else {
+      formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
+    }
   }
 
   console.log(
@@ -303,7 +310,7 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      verbose: true, // Print errors so we can catch Facebook 403s!
+      verbose: true,
     };
 
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions));
