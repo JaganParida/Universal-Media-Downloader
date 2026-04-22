@@ -1,5 +1,4 @@
 // File: src/controllers/mediaController.js
-//
 // Robust media downloader — YouTube · Facebook · Instagram · Generic
 
 const youtubedl = require("youtube-dl-exec");
@@ -20,6 +19,8 @@ const detectPlatform = (url) => {
   return "generic";
 };
 
+// ─── URL Normalizers (Magic Fix for Shortlinks) ───
+
 const normalizeYouTubeUrl = (url) => {
   try {
     const u = new URL(url);
@@ -31,7 +32,21 @@ const normalizeYouTubeUrl = (url) => {
   return url;
 };
 
-// ─── BASE OPTIONS (Removed Custom Headers for FB/IG to prevent blocking) ───
+const normalizeFacebookUrl = (url) => {
+  try {
+    const u = new URL(url);
+    // Convert /share/r/ID to direct reel link to bypass redirect blocks
+    const reelMatch = u.pathname.match(/^\/share\/r\/([a-zA-Z0-9_-]+)/);
+    if (reelMatch) return `https://www.facebook.com/reel/${reelMatch[1]}`;
+
+    // Convert /share/v/ID to direct watch link
+    const watchMatch = u.pathname.match(/^\/share\/v\/([a-zA-Z0-9_-]+)/);
+    if (watchMatch) return `https://www.facebook.com/watch?v=${watchMatch[1]}`;
+  } catch (_) {}
+  return url;
+};
+
+// ─── BASE OPTIONS ───
 
 const BASE = {
   ffmpegLocation: ffmpegBin,
@@ -53,17 +68,24 @@ const PLATFORM_OPTIONS = {
   },
   facebook: {
     ...BASE,
+    forceIpv4: true,
     geoBypass: true,
-    // 🔥 FIX: No custom user-agent! Let yt-dlp use its native mobile API extractor.
+    // Mobile Safari Spoofing: Reels strictly check for mobile browsers
+    addHeader: [
+      "User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+      "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language:en-US,en;q=0.5",
+    ],
   },
   instagram: {
     ...BASE,
+    forceIpv4: true,
     geoBypass: true,
+    addHeader: [
+      "User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+    ],
   },
-  generic: {
-    ...BASE,
-    geoBypass: true,
-  },
+  generic: { ...BASE, geoBypass: true },
 };
 
 const getPlatformOptions = (platform) =>
@@ -163,6 +185,8 @@ const getMediaInfo = async (req, res) => {
 
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
+    } else if (platform === "facebook") {
+      targetUrl = normalizeFacebookUrl(targetUrl); // ✅ FACEBOOK SHORTLINK BYPASS
     }
 
     const options = getPlatformOptions(platform);
@@ -271,9 +295,7 @@ const getMediaInfo = async (req, res) => {
 const downloadMedia = async (req, res) => {
   const { url, format_id, title } = req.query;
 
-  if (!url) {
-    return res.status(400).send("Missing URL");
-  }
+  if (!url) return res.status(400).send("Missing URL");
 
   const safeTitle =
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
@@ -282,20 +304,22 @@ const downloadMedia = async (req, res) => {
 
   if (platform === "youtube") {
     targetUrl = normalizeYouTubeUrl(targetUrl);
+  } else if (platform === "facebook") {
+    targetUrl = normalizeFacebookUrl(targetUrl); // ✅ FACEBOOK SHORTLINK BYPASS
   }
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 THE NATIVE YT-DLP FIX 🔥
-  // By using "bv*+ba/b", yt-dlp will automatically handle Facebook correctly
-  // since we stopped interfering with its headers.
+  // 🔥 THE ULTIMATE FACEBOOK REELS & VIDEO SOUND FIX 🔥
   let formatStr = "bv*+ba/b";
-  if (
-    format_id &&
-    format_id !== "best" &&
-    format_id !== "undefined" &&
-    platform !== "facebook"
-  ) {
+
+  if (platform === "facebook") {
+    if (format_id && format_id !== "best" && format_id !== "undefined") {
+      formatStr = `${format_id}/b`;
+    } else {
+      formatStr = "b";
+    }
+  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/bv*+ba/b`;
   }
 
@@ -329,9 +353,7 @@ const downloadMedia = async (req, res) => {
     );
 
     const actualFile = findTempFile(tempFilePath);
-    if (!actualFile) {
-      throw new Error("Output file was not created by yt-dlp.");
-    }
+    if (!actualFile) throw new Error("Output file was not created by yt-dlp.");
 
     const stat = fs.statSync(actualFile);
     if (stat.size === 0) {
@@ -340,10 +362,6 @@ const downloadMedia = async (req, res) => {
         "Downloaded file is empty. The video may be unavailable.",
       );
     }
-
-    console.log(
-      `✅ Download ready: ${actualFile} (${(stat.size / 1_048_576).toFixed(1)} MB)`,
-    );
 
     const ext = path.extname(actualFile).slice(1) || "mp4";
     const mimeTypes = {
@@ -370,9 +388,7 @@ const downloadMedia = async (req, res) => {
   } catch (error) {
     console.error("❌ Download error:", error.message);
     cleanup();
-    if (!res.headersSent) {
-      res.status(500).send(friendlyError(error.message));
-    }
+    if (!res.headersSent) res.status(500).send(friendlyError(error.message));
   }
 };
 
