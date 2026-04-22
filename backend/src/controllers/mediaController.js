@@ -286,16 +286,14 @@ const downloadMedia = async (req, res) => {
   const options = getPlatformOptions(platform);
 
   // 🔥 THE NATIVE YT-DLP FIX 🔥
-  // Hum yt-dlp ko force kar rahe hain ki wo naturally best video aur best audio
-  // dono ko uthaye aur FFMPEG se merge kare. Facebook extractors iske sath perfectly kaam karte hain.
   let formatStr = "bv*+ba/b";
-  if (
-    format_id &&
-    format_id !== "best" &&
-    format_id !== "undefined" &&
-    platform !== "facebook"
-  ) {
-    formatStr = `${format_id}+ba/bv*+ba/b`;
+
+  if (format_id && format_id !== "best" && format_id !== "undefined") {
+    // Fallback logic:
+    // 1. `${format_id}+ba` -> Merges video with audio (for separated DASH streams)
+    // 2. `${format_id}` -> Downloads format as-is (Crucial for Facebook's 'hd'/'sd' formats which already have audio)
+    // 3. `bv*+ba/b` -> Failsafe to best available combined streams
+    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
