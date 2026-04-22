@@ -298,24 +298,17 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
+  // Default format string
   let formatStr = "bv*+ba/b";
 
-  if (format_id && format_id !== "best" && format_id !== "undefined") {
-    if (platform === "facebook") {
-      // 🚨 FACEBOOK SPECIAL FIX 🚨
-      // Agar format_id 'hd' ya 'sd' hai toh usey directly use karo,
-      // Varna DASH video (eg: 12345v) ke liye sirf MERGE (+ba) try karo.
-      // Silent video (middle fallback) ko hata diya gaya hai.
-      if (format_id === "hd" || format_id === "sd") {
-        formatStr = `${format_id}/b`;
-      } else {
-        // Sirf 2 option: Ya toh Audio ke sath merge karo, nahi toh best combined stream utha lo
-        formatStr = `${format_id}+ba/bv*+ba/b`;
-      }
-    } else {
-      // YouTube / Instagram ke liye standard fallback
-      formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
-    }
+  if (platform === "facebook") {
+    // 🚨 FACEBOOK ULTIMATE FIX 🚨
+    // Facebook DASH streams (ending in 'v') fail to merge with audio without authentication.
+    // 'b' forces yt-dlp to grab the highest quality PRE-MERGED file (contains both video & audio natively).
+    formatStr = "b";
+  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
+    // YouTube / Instagram ke liye standard merging aur fallback
+    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
   console.log(
