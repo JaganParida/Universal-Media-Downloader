@@ -1,4 +1,5 @@
 // File: src/controllers/mediaController.js
+//
 // Robust media downloader — YouTube · Facebook · Instagram · Generic
 
 const youtubedl = require("youtube-dl-exec");
@@ -8,14 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// ─── MAGIC FIX FOR RENDER FFMPEG PERMISSIONS ───
-try {
-  if (fs.existsSync(ffmpegBin)) {
-    fs.chmodSync(ffmpegBin, 0o777); // Agar YouTube ke liye FFmpeg ki zarurat padi, toh Render use block nahi karega
-  }
-} catch (e) {
-  console.error("FFmpeg permission fix failed:", e);
-}
+// ─── Platform Detection ───────────────────────────────────────────────────────
 
 const detectPlatform = (url) => {
   if (/instagram\.com/i.test(url)) return "instagram";
@@ -37,21 +31,8 @@ const normalizeYouTubeUrl = (url) => {
   return url;
 };
 
-const normalizeFacebookUrl = (url) => {
-  try {
-    const u = new URL(url);
-    // Convert /share/r/ID to direct reel link to bypass redirect blocks
-    const reelMatch = u.pathname.match(/^\/share\/r\/([a-zA-Z0-9_-]+)/);
-    if (reelMatch) return `https://www.facebook.com/reel/${reelMatch[1]}`;
+// ─── BASE OPTIONS (No Custom FB/IG Headers to prevent blocking) ───
 
-    // Convert /share/v/ID to direct watch link
-    const watchMatch = u.pathname.match(/^\/share\/v\/([a-zA-Z0-9_-]+)/);
-    if (watchMatch) return `https://www.facebook.com/watch?v=${watchMatch[1]}`;
-  } catch (_) {}
-  return url;
-};
-
-// ─── PURE & CLEAN BASE OPTIONS ───
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
@@ -62,7 +43,6 @@ const BASE = {
   noPlaylist: true,
   bufferSize: "16K",
   concurrentFragments: 4,
-  remuxVideo: "mp4",
 };
 
 const PLATFORM_OPTIONS = {
@@ -71,13 +51,24 @@ const PLATFORM_OPTIONS = {
     extractorArgs: "youtube:player_client=web",
     geoBypass: true,
   },
-  facebook: { ...BASE, geoBypass: true },
-  instagram: { ...BASE, geoBypass: true },
-  generic: { ...BASE, geoBypass: true },
+  facebook: {
+    ...BASE,
+    geoBypass: true,
+  },
+  instagram: {
+    ...BASE,
+    geoBypass: true,
+  },
+  generic: {
+    ...BASE,
+    geoBypass: true,
+  },
 };
 
 const getPlatformOptions = (platform) =>
   PLATFORM_OPTIONS[platform] ?? PLATFORM_OPTIONS.generic;
+
+// ─── Resolution Bucketing ───
 
 const bucketResolution = (width, height) => {
   const short = Math.min(width || 0, height || 0);
@@ -142,6 +133,7 @@ const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
   throw lastError;
 };
 
+// ─── TEMP FILE FINDER ───
 const findTempFile = (basePath) => {
   if (fs.existsSync(basePath)) return basePath;
   const dir = path.dirname(basePath);
@@ -170,8 +162,6 @@ const getMediaInfo = async (req, res) => {
 
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
-    } else if (platform === "facebook") {
-      targetUrl = normalizeFacebookUrl(targetUrl);
     }
 
     const options = getPlatformOptions(platform);
@@ -280,7 +270,9 @@ const getMediaInfo = async (req, res) => {
 const downloadMedia = async (req, res) => {
   const { url, format_id, title } = req.query;
 
-  if (!url) return res.status(400).send("Missing URL");
+  if (!url) {
+    return res.status(400).send("Missing URL");
+  }
 
   const safeTitle =
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
@@ -289,22 +281,21 @@ const downloadMedia = async (req, res) => {
 
   if (platform === "youtube") {
     targetUrl = normalizeYouTubeUrl(targetUrl);
-  } else if (platform === "facebook") {
-    targetUrl = normalizeFacebookUrl(targetUrl);
   }
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 ABSOLUTE BULLETPROOF AUDIO FIX FOR FACEBOOK & INSTAGRAM 🔥
-  let formatStr = "bestvideo+bestaudio/best";
-
-  if (platform === "facebook" || platform === "instagram") {
-    // Agar Facebook ya Insta hai, frontend ki demand ignore karo.
-    // Humesha Pre-Merged file download karo taaki FFmpeg ki zarurat hi na pade.
-    formatStr = "b";
-  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // YouTube ke liye proper merging allow karo
-    formatStr = `${format_id}+bestaudio/best`;
+  // 🔥 THE NATIVE YT-DLP FIX 🔥
+  // Hum yt-dlp ko force kar rahe hain ki wo naturally best video aur best audio
+  // dono ko uthaye aur FFMPEG se merge kare. Facebook extractors iske sath perfectly kaam karte hain.
+  let formatStr = "bv*+ba/b";
+  if (
+    format_id &&
+    format_id !== "best" &&
+    format_id !== "undefined" &&
+    platform !== "facebook"
+  ) {
+    formatStr = `${format_id}+ba/bv*+ba/b`;
   }
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -325,6 +316,8 @@ const downloadMedia = async (req, res) => {
   };
 
   try {
+    console.log(`⬇️  Downloading [${platform}] natively format="${formatStr}"`);
+
     await withRetry(() =>
       youtubedl(targetUrl, {
         ...options,
@@ -335,7 +328,9 @@ const downloadMedia = async (req, res) => {
     );
 
     const actualFile = findTempFile(tempFilePath);
-    if (!actualFile) throw new Error("Output file was not created by yt-dlp.");
+    if (!actualFile) {
+      throw new Error("Output file was not created by yt-dlp.");
+    }
 
     const stat = fs.statSync(actualFile);
     if (stat.size === 0) {
@@ -344,6 +339,10 @@ const downloadMedia = async (req, res) => {
         "Downloaded file is empty. The video may be unavailable.",
       );
     }
+
+    console.log(
+      `✅ Download ready: ${actualFile} (${(stat.size / 1_048_576).toFixed(1)} MB)`,
+    );
 
     const ext = path.extname(actualFile).slice(1) || "mp4";
     const mimeTypes = {
@@ -364,12 +363,15 @@ const downloadMedia = async (req, res) => {
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
 
-    stream.on("error", () => cleanup());
+    stream.on("error", (err) => cleanup());
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
   } catch (error) {
+    console.error("❌ Download error:", error.message);
     cleanup();
-    if (!res.headersSent) res.status(500).send(friendlyError(error.message));
+    if (!res.headersSent) {
+      res.status(500).send(friendlyError(error.message));
+    }
   }
 };
 
