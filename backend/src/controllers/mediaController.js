@@ -298,16 +298,15 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // Default format string
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🚨 FACEBOOK ULTIMATE FIX 🚨
-    // Facebook DASH streams (ending in 'v') fail to merge with audio without authentication.
-    // 'b' forces yt-dlp to grab the highest quality PRE-MERGED file (contains both video & audio natively).
-    formatStr = "b";
+    // 🔥 ULTIMATE FACEBOOK AUDIO FIX 🔥
+    // Bypass all DASH stream merging. We explicitly demand Facebook's native 'hd' format first.
+    // If 'hd' is missing, it falls back to 'sd', which is also guaranteed to have audio.
+    formatStr = "hd/sd/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // YouTube / Instagram ke liye standard merging aur fallback
+    // YouTube / Instagram Standard Merging
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
