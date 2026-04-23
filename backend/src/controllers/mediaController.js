@@ -66,9 +66,7 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // Use the explicit file if available, otherwise fall back to Opera browser extraction
-    cookies: activeCookiePath ? activeCookiePath : undefined,
-    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
+    cookies: activeCookiePath,
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -76,8 +74,7 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: activeCookiePath ? activeCookiePath : undefined,
-    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
+    cookies: activeCookiePath,
   },
   generic: {
     ...BASE,
@@ -129,7 +126,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("age") ||
     m.includes("cookies")
   )
-    return "This video requires active cookies to download. Please ensure your cookies.txt file is valid or Opera is open.";
+    return "This video requires active cookies to download. Please ensure your cookies.txt file is valid.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -308,14 +305,14 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 🔥 STRICT MERGE PRIORITY 🔥
-  // We completely strip away 'hd' priority. This forces yt-dlp to pull
-  // the highest quality video and audio streams and merge them into mp4.
-  let formatStr = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b";
+  let formatStr = "bv*+ba/b";
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // Attempt merging with the specific format_id the user clicked
-    formatStr = `${format_id}+ba[ext=m4a]/${format_id}+ba/${format_id}/bv*+ba/b`;
+    // 🔥 THE SILENT VIDEO KILLER FIX 🔥
+    // Humne yahan se wo akela `${format_id}` hata diya hai.
+    // Ab agar `+ba` (audio merge) fail hota hai, toh wo sidha `b` (pre-merged with audio) uthayega.
+    // Ye line ensure karti hai ki bina audio ke video kabhi download nahi hogi.
+    formatStr = `${format_id}+ba/b`;
   }
 
   console.log(
