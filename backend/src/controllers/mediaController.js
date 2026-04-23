@@ -9,7 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// 🔥 COOKIE FILE FINDER 🔥
+// 🔥 SPECIFIC COOKIE FILE AUTHENTICATION 🔥
 const possibleCookiePaths = [
   path.join(process.cwd(), "www.facebook.com_cookies.txt"),
   path.join(__dirname, "../../www.facebook.com_cookies.txt"),
@@ -66,7 +66,9 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    cookies: activeCookiePath,
+    // Uses specific cookie file if found, otherwise falls back to Opera browser auth
+    cookies: activeCookiePath ? activeCookiePath : undefined,
+    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -74,7 +76,8 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: activeCookiePath,
+    cookies: activeCookiePath ? activeCookiePath : undefined,
+    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
   },
   generic: {
     ...BASE,
@@ -126,7 +129,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("age") ||
     m.includes("cookies")
   )
-    return "This video requires active cookies to download. Please ensure your cookies.txt file is valid.";
+    return "This video requires active cookies to download. Please ensure your authentication is valid.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -307,9 +310,14 @@ const downloadMedia = async (req, res) => {
 
   let formatStr = "bv*+ba/b";
 
-  if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // The format string allows fallback to standard "b" (pre-merged) if all else fails.
-    formatStr = `${format_id}+ba/b`;
+  if (platform === "facebook") {
+    // 🔥 THE ABSOLUTE FACEBOOK SILENT AUDIO FIX 🔥
+    // Facebook serves silent fake audio tracks to break merging.
+    // We completely IGNORE the requested format_id from the frontend.
+    // We force 'b' (best pre-merged), which guarantees the original embedded audio.
+    formatStr = "b";
+  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
+    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
   console.log(
@@ -340,10 +348,6 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      // 🔥 THE AUDIO FIX 🔥
-      // Force ffmpeg to transcode audio to standard AAC. This ensures the output MP4
-      // plays perfectly across all browsers and media players.
-      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
       verbose: true,
     };
 
