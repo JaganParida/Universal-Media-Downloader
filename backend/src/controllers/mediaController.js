@@ -9,18 +9,9 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// 🔥 SPECIFIC COOKIE FILE AUTHENTICATION 🔥
-const possibleCookiePaths = [
-  path.join(process.cwd(), "www.facebook.com_cookies.txt"),
-  path.join(__dirname, "../../www.facebook.com_cookies.txt"),
-];
-let activeCookiePath = undefined;
-for (const p of possibleCookiePaths) {
-  if (fs.existsSync(p)) {
-    activeCookiePath = p;
-    break;
-  }
-}
+// 🔥 STRICT COOKIE PATH FOR RENDER SERVER 🔥
+// Yeh seedha tere root folder se cookies uthayega jahan package.json hai
+const COOKIES_FILE = path.join(process.cwd(), "www.facebook.com_cookies.txt");
 
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
@@ -66,9 +57,8 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // Uses specific cookie file if found, otherwise falls back to Opera browser auth
-    cookies: activeCookiePath ? activeCookiePath : undefined,
-    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
+    // 🚨 OPERA HATA DIYA HAI. Ab sirf static file use hogi jo Render pe chalegi!
+    cookies: fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : undefined,
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -76,8 +66,7 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: activeCookiePath ? activeCookiePath : undefined,
-    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
+    cookies: fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : undefined,
   },
   generic: {
     ...BASE,
@@ -129,7 +118,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("age") ||
     m.includes("cookies")
   )
-    return "This video requires active cookies. Please ensure your authentication is valid.";
+    return "This video requires active cookies. Please ensure cookies.txt on your server is valid.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -190,6 +179,12 @@ const getMediaInfo = async (req, res) => {
     }
 
     const options = getPlatformOptions(platform);
+
+    if (platform === "facebook") {
+      console.log(
+        `🍪 Checking server cookie file: ${COOKIES_FILE} | Exists: ${fs.existsSync(COOKIES_FILE)}`,
+      );
+    }
 
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
@@ -312,7 +307,7 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // We prioritize "bestvideo+bestaudio" to force proper merging using the extracted cookies.
+    // 🚨 ABSOLUTE STRICT MERGE COMMAND 🚨
     formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bv*+ba/b";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
@@ -347,9 +342,6 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
-      // 🔥 EXPLICIT AUDIO TRANSCODING FLAG 🔥
-      // This forces FFmpeg to transcode any weird DASH audio formats into standard AAC.
-      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
     console.log("⏳ Running yt-dlp...");
