@@ -9,6 +9,19 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
+// 🔥 SPECIFIC COOKIE FILE AUTHENTICATION 🔥
+const possibleCookiePaths = [
+  path.join(process.cwd(), "www.facebook.com_cookies.txt"),
+  path.join(__dirname, "../../www.facebook.com_cookies.txt"),
+];
+let activeCookiePath = undefined;
+for (const p of possibleCookiePaths) {
+  if (fs.existsSync(p)) {
+    activeCookiePath = p;
+    break;
+  }
+}
+
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
 const detectPlatform = (url) => {
@@ -53,8 +66,9 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // 🔥 Explicitly using Opera to bypass 403 Audio Blocks
-    cookiesFromBrowser: "opera",
+    // Uses specific cookie file if found, otherwise falls back to Opera browser auth
+    cookies: activeCookiePath ? activeCookiePath : undefined,
+    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -62,7 +76,8 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookiesFromBrowser: "opera",
+    cookies: activeCookiePath ? activeCookiePath : undefined,
+    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
   },
   generic: {
     ...BASE,
@@ -114,7 +129,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("age") ||
     m.includes("cookies")
   )
-    return "This video requires active cookies. Please ensure Opera is closed so the backend can read the cookies.";
+    return "This video requires active cookies. Please ensure your authentication is valid.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -294,13 +309,10 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // Default format string
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🔥 FINAL FACEBOOK FORMAT STRING 🔥
     // We prioritize "bestvideo+bestaudio" to force proper merging using the extracted cookies.
-    // If it fails, it will fall back to "b", but with closed Opera, it should never fail on audio chunks.
     formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bv*+ba/b";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
@@ -335,6 +347,9 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
+      // 🔥 EXPLICIT AUDIO TRANSCODING FLAG 🔥
+      // This forces FFmpeg to transcode any weird DASH audio formats into standard AAC.
+      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
     console.log("⏳ Running yt-dlp...");
