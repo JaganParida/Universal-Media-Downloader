@@ -10,10 +10,9 @@ const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
 // 🔥 COOKIE FILE FINDER 🔥
-// Hum check kar rahe hain ki teri www.facebook.com_cookies.txt kahan rakhi hai
 const possibleCookiePaths = [
-  path.join(process.cwd(), "www.facebook.com_cookies.txt"), // Agar server root folder se run ho raha hai
-  path.join(__dirname, "../../www.facebook.com_cookies.txt"), // Agar controllers folder se relative path hai
+  path.join(process.cwd(), "www.facebook.com_cookies.txt"),
+  path.join(__dirname, "../../www.facebook.com_cookies.txt"),
 ];
 let activeCookiePath = undefined;
 for (const p of possibleCookiePaths) {
@@ -50,7 +49,7 @@ const normalizeYouTubeUrl = (url) => {
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
-  noWarnings: true, // ✅ CRITICAL FIX: Ise wapas 'true' kiya taaki "--no-no-warnings" wala crash na aaye!
+  noWarnings: true,
   retries: 5,
   fragmentRetries: 5,
   socketTimeout: 60,
@@ -67,9 +66,6 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // 🔥 ULTIMATE FACEBOOK AUDIO FIX 🔥
-    // Live browser extract karne ke bajaye explicit cookies.txt use karo.
-    // Ye audio stream ka 403 block completely bypass kar dega.
     cookies: activeCookiePath,
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -190,12 +186,6 @@ const getMediaInfo = async (req, res) => {
     }
 
     const options = getPlatformOptions(platform);
-
-    if (platform === "facebook") {
-      console.log(
-        `🍪 Cookie path applied: ${options.cookies ? "Yes (Found)" : "No (File missing)"}`,
-      );
-    }
 
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
@@ -318,8 +308,13 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // Ab jab hamare paas cookie file hai, toh best video aur best audio ko successfully merge kiya ja sakta hai
-    formatStr = "bestvideo+bestaudio/best";
+    // 🚨 THE GUARANTEED AUDIO FIX FOR FACEBOOK 🚨
+    // 1. Try 'hd' (High Def pre-merged, guaranteed audio)
+    // 2. If 'hd' unavailable, try any format that natively has BOTH video and audio [vcodec!=none][acodec!=none]
+    // 3. Fallback to 'sd'
+    // By prioritizing pre-merged files, we completely avoid the 403 audio chunk download drops.
+    formatStr =
+      "hd/best[vcodec!=none][acodec!=none]/sd/bestvideo+bestaudio/best";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
@@ -347,6 +342,7 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
+      verbose: true,
     };
 
     console.log(`🎯 Format String: ${formatStr}`);
