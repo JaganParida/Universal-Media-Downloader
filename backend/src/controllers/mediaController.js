@@ -308,10 +308,7 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // 🔥 THE SILENT VIDEO KILLER FIX 🔥
-    // Humne yahan se wo akela `${format_id}` hata diya hai.
-    // Ab agar `+ba` (audio merge) fail hota hai, toh wo sidha `b` (pre-merged with audio) uthayega.
-    // Ye line ensure karti hai ki bina audio ke video kabhi download nahi hogi.
+    // The format string allows fallback to standard "b" (pre-merged) if all else fails.
     formatStr = `${format_id}+ba/b`;
   }
 
@@ -343,6 +340,10 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
+      // 🔥 THE AUDIO FIX 🔥
+      // Force ffmpeg to transcode audio to standard AAC. This ensures the output MP4
+      // plays perfectly across all browsers and media players.
+      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
       verbose: true,
     };
 
