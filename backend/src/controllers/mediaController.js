@@ -36,7 +36,7 @@ const normalizeYouTubeUrl = (url) => {
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
-  noWarnings: true, // ✅ FIXED: Ise wapas 'true' kar diya taki '--no-no-warnings' wala crash na aaye.
+  noWarnings: false, // DEBUG: Warnings ON rakhi hain taaki error chhupe nahi
   retries: 5,
   fragmentRetries: 5,
   socketTimeout: 60,
@@ -50,9 +50,20 @@ const PLATFORM_OPTIONS = {
     extractorArgs: "youtube:player_client=web",
     geoBypass: true,
   },
-  facebook: { ...BASE, geoBypass: false },
-  instagram: { ...BASE, geoBypass: true },
-  generic: { ...BASE, geoBypass: true },
+  facebook: {
+    ...BASE,
+    geoBypass: false,
+    cookiesFromBrowser: "opera", // Tumhari request ke hisaab se Opera cookies
+  },
+  instagram: {
+    ...BASE,
+    geoBypass: true,
+    cookiesFromBrowser: "opera",
+  },
+  generic: {
+    ...BASE,
+    geoBypass: true,
+  },
 };
 
 const getPlatformOptions = (platform) =>
@@ -93,8 +104,13 @@ const estimateSize = (f, durationSec) => {
 
 const friendlyError = (rawMessage = "") => {
   const m = rawMessage.toLowerCase();
-  if (m.includes("sign in") || m.includes("login") || m.includes("age"))
-    return "This video requires login.";
+  if (
+    m.includes("sign in") ||
+    m.includes("login") ||
+    m.includes("age") ||
+    m.includes("cookies")
+  )
+    return "This video requires login or active cookies to download. Please keep Opera open.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -148,9 +164,18 @@ const getMediaInfo = async (req, res) => {
   try {
     let targetUrl = cleanUrl(url);
     const platform = detectPlatform(targetUrl);
-    if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+
+    if (platform === "youtube") {
+      targetUrl = normalizeYouTubeUrl(targetUrl);
+    }
 
     const options = getPlatformOptions(platform);
+
+    // DEBUG FLAG FOR INFO
+    console.log(
+      `\n📡 [DEBUG FLAG - INFO] Platform: ${platform} | URL: ${targetUrl}`,
+    );
+
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
     );
@@ -271,24 +296,37 @@ const downloadMedia = async (req, res) => {
 
   let formatStr = "bv*+ba/b";
 
-  if (format_id && format_id !== "best" && format_id !== "undefined") {
-    if (platform === "facebook") {
-      // ✅ FACEBOOK AUDIO FIX: Try merging requested video with audio.
-      // If it fails (due to blocked audio), it falls back directly to 'b' (best pre-merged file with audio).
-      // Ye us 1.10MB wali silent video ko download hone se rok dega.
-      formatStr = `${format_id}+ba/b`;
-    } else {
-      formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
-    }
+  if (platform === "facebook") {
+    // Force Facebook to fetch best video and best audio and merge them.
+    formatStr = "bestvideo+bestaudio/best";
+  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
+    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
-
-  console.log(
-    "🎯 [DOWNLOAD API] Final Format String passed to yt-dlp:",
-    formatStr,
-  );
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
+
+  // ----------------------------------------------------------------
+  // 🚩 EXTREME DEBUG FLAGS - TERMINAL MEIN YEH DHYAN SE DEKHNA 🚩
+  // ----------------------------------------------------------------
+  console.log("\n🚩 🚩 🚩 DEBUG FLAGS START 🚩 🚩 🚩");
+  console.log(`[FLAG 1] URL: ${targetUrl}`);
+  console.log(`[FLAG 2] Platform: ${platform}`);
+  console.log(`[FLAG 3] Requested Format: ${format_id}`);
+  console.log(`[FLAG 4] YT-DLP Command Format String: ${formatStr}`);
+  console.log(
+    `[FLAG 5] Cookies Extracting From: ${options.cookiesFromBrowser}`,
+  );
+  console.log(`[FLAG 6] Temp Output Path: ${tempFilePath}`);
+
+  // Create a copy-pasteable raw terminal command for you to test locally
+  const rawCommand = `npx yt-dlp "${targetUrl}" -f "${formatStr}" --cookies-from-browser opera --verbose -o "test_output.mp4"`;
+  console.log(
+    "\n🛠️ [MANUAL TEST COMMAND] Bhai, is command ko copy kar aur naye terminal mein run kar:",
+  );
+  console.log(`\x1b[36m${rawCommand}\x1b[0m\n`); // This prints in Cyan color
+  console.log("🚩 🚩 🚩 DEBUG FLAGS END 🚩 🚩 🚩\n");
+  // ----------------------------------------------------------------
 
   const cleanup = () => {
     try {
@@ -310,9 +348,10 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      verbose: true,
+      verbose: true, // This will dump FFmpeg and Cookie errors into the console
     };
 
+    console.log("⏳ Running yt-dlp...");
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions));
 
     const actualFile = findTempFile(tempFilePath);
@@ -320,7 +359,7 @@ const downloadMedia = async (req, res) => {
 
     const stat = fs.statSync(actualFile);
     console.log(
-      `📊 [DOWNLOAD API] File created successfully. Size: ${(stat.size / 1_048_576).toFixed(2)} MB`,
+      `📊 [FLAG 7] File created successfully. Exact Size: ${(stat.size / 1_048_576).toFixed(3)} MB`,
     );
 
     if (stat.size === 0) {
@@ -353,7 +392,8 @@ const downloadMedia = async (req, res) => {
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
   } catch (error) {
-    console.error("❌ Download error:", error.message);
+    console.error("❌ ❌ ❌ [FLAG 8] ERROR CAPTURED: ❌ ❌ ❌");
+    console.error(error.message);
     cleanup();
     if (!res.headersSent) res.status(500).send(friendlyError(error.message));
   }
