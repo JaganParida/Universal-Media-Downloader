@@ -9,6 +9,20 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
+// 🔥 COOKIE FILE FINDER 🔥
+// Hum check kar rahe hain ki teri www.facebook.com_cookies.txt kahan rakhi hai
+const possibleCookiePaths = [
+  path.join(process.cwd(), "www.facebook.com_cookies.txt"), // Agar server root folder se run ho raha hai
+  path.join(__dirname, "../../www.facebook.com_cookies.txt"), // Agar controllers folder se relative path hai
+];
+let activeCookiePath = undefined;
+for (const p of possibleCookiePaths) {
+  if (fs.existsSync(p)) {
+    activeCookiePath = p;
+    break;
+  }
+}
+
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
 const detectPlatform = (url) => {
@@ -36,7 +50,7 @@ const normalizeYouTubeUrl = (url) => {
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
-  noWarnings: false, // DEBUG: Warnings ON rakhi hain taaki error chhupe nahi
+  noWarnings: true, // ✅ CRITICAL FIX: Ise wapas 'true' kiya taaki "--no-no-warnings" wala crash na aaye!
   retries: 5,
   fragmentRetries: 5,
   socketTimeout: 60,
@@ -53,12 +67,18 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    cookiesFromBrowser: "opera", // Tumhari request ke hisaab se Opera cookies
+    // 🔥 ULTIMATE FACEBOOK AUDIO FIX 🔥
+    // Live browser extract karne ke bajaye explicit cookies.txt use karo.
+    // Ye audio stream ka 403 block completely bypass kar dega.
+    cookies: activeCookiePath,
+    addHeader: [
+      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ],
   },
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookiesFromBrowser: "opera",
+    cookies: activeCookiePath,
   },
   generic: {
     ...BASE,
@@ -110,7 +130,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("age") ||
     m.includes("cookies")
   )
-    return "This video requires login or active cookies to download. Please keep Opera open.";
+    return "This video requires active cookies to download. Please ensure your cookies.txt file is valid.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -171,10 +191,11 @@ const getMediaInfo = async (req, res) => {
 
     const options = getPlatformOptions(platform);
 
-    // DEBUG FLAG FOR INFO
-    console.log(
-      `\n📡 [DEBUG FLAG - INFO] Platform: ${platform} | URL: ${targetUrl}`,
-    );
+    if (platform === "facebook") {
+      console.log(
+        `🍪 Cookie path applied: ${options.cookies ? "Yes (Found)" : "No (File missing)"}`,
+      );
+    }
 
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
@@ -297,7 +318,7 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // Force Facebook to fetch best video and best audio and merge them.
+    // Ab jab hamare paas cookie file hai, toh best video aur best audio ko successfully merge kiya ja sakta hai
     formatStr = "bestvideo+bestaudio/best";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
@@ -305,28 +326,6 @@ const downloadMedia = async (req, res) => {
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
-
-  // ----------------------------------------------------------------
-  // 🚩 EXTREME DEBUG FLAGS - TERMINAL MEIN YEH DHYAN SE DEKHNA 🚩
-  // ----------------------------------------------------------------
-  console.log("\n🚩 🚩 🚩 DEBUG FLAGS START 🚩 🚩 🚩");
-  console.log(`[FLAG 1] URL: ${targetUrl}`);
-  console.log(`[FLAG 2] Platform: ${platform}`);
-  console.log(`[FLAG 3] Requested Format: ${format_id}`);
-  console.log(`[FLAG 4] YT-DLP Command Format String: ${formatStr}`);
-  console.log(
-    `[FLAG 5] Cookies Extracting From: ${options.cookiesFromBrowser}`,
-  );
-  console.log(`[FLAG 6] Temp Output Path: ${tempFilePath}`);
-
-  // Create a copy-pasteable raw terminal command for you to test locally
-  const rawCommand = `npx yt-dlp "${targetUrl}" -f "${formatStr}" --cookies-from-browser opera --verbose -o "test_output.mp4"`;
-  console.log(
-    "\n🛠️ [MANUAL TEST COMMAND] Bhai, is command ko copy kar aur naye terminal mein run kar:",
-  );
-  console.log(`\x1b[36m${rawCommand}\x1b[0m\n`); // This prints in Cyan color
-  console.log("🚩 🚩 🚩 DEBUG FLAGS END 🚩 🚩 🚩\n");
-  // ----------------------------------------------------------------
 
   const cleanup = () => {
     try {
@@ -348,9 +347,9 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      verbose: true, // This will dump FFmpeg and Cookie errors into the console
     };
 
+    console.log(`🎯 Format String: ${formatStr}`);
     console.log("⏳ Running yt-dlp...");
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions));
 
@@ -359,7 +358,7 @@ const downloadMedia = async (req, res) => {
 
     const stat = fs.statSync(actualFile);
     console.log(
-      `📊 [FLAG 7] File created successfully. Exact Size: ${(stat.size / 1_048_576).toFixed(3)} MB`,
+      `📊 File created successfully. Exact Size: ${(stat.size / 1_048_576).toFixed(3)} MB`,
     );
 
     if (stat.size === 0) {
@@ -392,8 +391,7 @@ const downloadMedia = async (req, res) => {
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
   } catch (error) {
-    console.error("❌ ❌ ❌ [FLAG 8] ERROR CAPTURED: ❌ ❌ ❌");
-    console.error(error.message);
+    console.error("❌ ERROR CAPTURED:", error.message);
     cleanup();
     if (!res.headersSent) res.status(500).send(friendlyError(error.message));
   }
