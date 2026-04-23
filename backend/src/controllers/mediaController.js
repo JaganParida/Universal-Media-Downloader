@@ -66,7 +66,9 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    cookies: activeCookiePath,
+    // Use the explicit file if available, otherwise fall back to Opera browser extraction
+    cookies: activeCookiePath ? activeCookiePath : undefined,
+    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -74,7 +76,8 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: activeCookiePath,
+    cookies: activeCookiePath ? activeCookiePath : undefined,
+    cookiesFromBrowser: activeCookiePath ? undefined : "opera",
   },
   generic: {
     ...BASE,
@@ -126,7 +129,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("age") ||
     m.includes("cookies")
   )
-    return "This video requires active cookies to download. Please ensure your cookies.txt file is valid.";
+    return "This video requires active cookies to download. Please ensure your cookies.txt file is valid or Opera is open.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -305,19 +308,20 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  let formatStr = "bv*+ba/b";
+  // 🔥 STRICT MERGE PRIORITY 🔥
+  // We completely strip away 'hd' priority. This forces yt-dlp to pull
+  // the highest quality video and audio streams and merge them into mp4.
+  let formatStr = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b[ext=mp4]/b";
 
-  if (platform === "facebook") {
-    // 🚨 THE GUARANTEED AUDIO FIX FOR FACEBOOK 🚨
-    // 1. Try 'hd' (High Def pre-merged, guaranteed audio)
-    // 2. If 'hd' unavailable, try any format that natively has BOTH video and audio [vcodec!=none][acodec!=none]
-    // 3. Fallback to 'sd'
-    // By prioritizing pre-merged files, we completely avoid the 403 audio chunk download drops.
-    formatStr =
-      "hd/best[vcodec!=none][acodec!=none]/sd/bestvideo+bestaudio/best";
-  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
+  if (format_id && format_id !== "best" && format_id !== "undefined") {
+    // Attempt merging with the specific format_id the user clicked
+    formatStr = `${format_id}+ba[ext=m4a]/${format_id}+ba/${format_id}/bv*+ba/b`;
   }
+
+  console.log(
+    "🎯 [DOWNLOAD API] Final Format String passed to yt-dlp:",
+    formatStr,
+  );
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
@@ -345,7 +349,6 @@ const downloadMedia = async (req, res) => {
       verbose: true,
     };
 
-    console.log(`🎯 Format String: ${formatStr}`);
     console.log("⏳ Running yt-dlp...");
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions));
 
