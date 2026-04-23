@@ -9,7 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// 🔥 COOKIE FILE FINDER 🔥
+// 🔥 SPECIFIC COOKIE FILE AUTHENTICATION 🔥
 const possibleCookiePaths = [
   path.join(process.cwd(), "www.facebook.com_cookies.txt"),
   path.join(__dirname, "../../www.facebook.com_cookies.txt"),
@@ -66,13 +66,15 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    cookies: activeCookiePath,
-    // 🚨 REMOVED CUSTOM USER-AGENT: It was confusing Facebook's API and breaking yt-dlp's native extraction!
+    cookies: activeCookiePath ? activeCookiePath : undefined,
+    addHeader: [
+      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ],
   },
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: activeCookiePath,
+    cookies: activeCookiePath ? activeCookiePath : undefined,
   },
   generic: {
     ...BASE,
@@ -124,7 +126,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("age") ||
     m.includes("cookies")
   )
-    return "This video requires active cookies. Please ensure your cookies.txt file is valid.";
+    return "This video requires active cookies. Please ensure your authentication is valid.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -182,6 +184,9 @@ const getMediaInfo = async (req, res) => {
 
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
+    } else if (platform === "facebook") {
+      // Force mobile Facebook to get pre-merged media links
+      targetUrl = targetUrl.replace(/(www\.)?facebook\.com/i, "m.facebook.com");
     }
 
     const options = getPlatformOptions(platform);
@@ -307,18 +312,20 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🔥 THE BROWSER SILENT VIDEO FIX 🔥
-    // We EXPLICITLY demand 'mp4' for video and 'm4a' (AAC) for audio.
-    // This prevents yt-dlp from merging unsupported OPUS audio into an MP4 file,
-    // which is the #1 reason web browsers play the video but stay completely silent!
-    formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
+    // 🔥 THE ABSOLUTE ANTI-DUMMY AUDIO FIX 🔥
+    // 1. Force the mobile version of the URL to bypass Facebook's advanced desktop DASH blocking.
+    targetUrl = targetUrl.replace(/(www\.)?facebook\.com/i, "m.facebook.com");
+
+    // 2. Strictly demand a format where both video and audio are natively present in the same file.
+    // This completely bypasses yt-dlp attempting to merge a fake silent audio track.
+    formatStr = "best[vcodec!=none][acodec!=none]/best";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}[ext=mp4]+ba[ext=m4a]/${format_id}+ba/b`;
+    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
+  console.log(`🎯 [DOWNLOAD API] Final Target URL: ${targetUrl}`);
   console.log(
-    "🎯 [DOWNLOAD API] Final Format String passed to yt-dlp:",
-    formatStr,
+    `🎯 [DOWNLOAD API] Final Format String passed to yt-dlp: ${formatStr}`,
   );
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -342,8 +349,6 @@ const downloadMedia = async (req, res) => {
     const ytdlpOptions = {
       ...options,
       format: formatStr,
-      // 🔥 FORCE CODECS 🔥 Ensures final file is H264 and AAC (playable everywhere)
-      formatSort: "vcodec:h264,acodec:aac",
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
