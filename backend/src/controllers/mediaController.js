@@ -9,9 +9,18 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// 🔥 STRICT COOKIE PATH FOR RENDER SERVER 🔥
-// Yeh seedha tere root folder se cookies uthayega jahan package.json hai
-const COOKIES_FILE = path.join(process.cwd(), "www.facebook.com_cookies.txt");
+// 🔥 COOKIE FILE FINDER 🔥
+const possibleCookiePaths = [
+  path.join(process.cwd(), "www.facebook.com_cookies.txt"),
+  path.join(__dirname, "../../www.facebook.com_cookies.txt"),
+];
+let activeCookiePath = undefined;
+for (const p of possibleCookiePaths) {
+  if (fs.existsSync(p)) {
+    activeCookiePath = p;
+    break;
+  }
+}
 
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
@@ -57,16 +66,13 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // 🚨 OPERA HATA DIYA HAI. Ab sirf static file use hogi jo Render pe chalegi!
-    cookies: fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : undefined,
-    addHeader: [
-      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    ],
+    cookies: activeCookiePath,
+    // 🚨 REMOVED CUSTOM USER-AGENT: It was confusing Facebook's API and breaking yt-dlp's native extraction!
   },
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : undefined,
+    cookies: activeCookiePath,
   },
   generic: {
     ...BASE,
@@ -118,7 +124,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("age") ||
     m.includes("cookies")
   )
-    return "This video requires active cookies. Please ensure cookies.txt on your server is valid.";
+    return "This video requires active cookies. Please ensure your cookies.txt file is valid.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -179,12 +185,6 @@ const getMediaInfo = async (req, res) => {
     }
 
     const options = getPlatformOptions(platform);
-
-    if (platform === "facebook") {
-      console.log(
-        `🍪 Checking server cookie file: ${COOKIES_FILE} | Exists: ${fs.existsSync(COOKIES_FILE)}`,
-      );
-    }
 
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
@@ -307,10 +307,13 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🚨 ABSOLUTE STRICT MERGE COMMAND 🚨
-    formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bv*+ba/b";
+    // 🔥 THE BROWSER SILENT VIDEO FIX 🔥
+    // We EXPLICITLY demand 'mp4' for video and 'm4a' (AAC) for audio.
+    // This prevents yt-dlp from merging unsupported OPUS audio into an MP4 file,
+    // which is the #1 reason web browsers play the video but stay completely silent!
+    formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
+    formatStr = `${format_id}[ext=mp4]+ba[ext=m4a]/${format_id}+ba/b`;
   }
 
   console.log(
@@ -339,6 +342,8 @@ const downloadMedia = async (req, res) => {
     const ytdlpOptions = {
       ...options,
       format: formatStr,
+      // 🔥 FORCE CODECS 🔥 Ensures final file is H264 and AAC (playable everywhere)
+      formatSort: "vcodec:h264,acodec:aac",
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
