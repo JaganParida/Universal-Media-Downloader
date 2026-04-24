@@ -305,7 +305,11 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
+    // 🔥 FIXED LOGIC: Removed the isolated `/${format_id}/` fallback.
+    // 1. Try: Requested Format + Best Audio
+    // 2. Fallback: Best Combined Stream 'b' (GUARANTEES AUDIO for FB/IG Reels)
+    // 3. Fallback: Best Video + Best Audio
+    formatStr = `${format_id}+ba/b/bv*+ba`;
   }
 
   console.log(
