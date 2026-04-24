@@ -205,8 +205,7 @@ const getMediaInfo = async (req, res) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
 
-        // 🔥 FACEBOOK UI FIX: Sirf wahi formats frontend par bhejo jisme pehle se aawaz aur video dono hain!
-        // Isse frontend se mute/DASH formats puri tarah hide ho jayenge.
+        // 🔥 FACEBOOK UI FIX: Display ONLY formats that natively contain BOTH audio and video.
         if (platform === "facebook") {
           return hasV && hasA;
         }
@@ -321,11 +320,11 @@ const downloadMedia = async (req, res) => {
   if (platform === "facebook") {
     targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
     // 🔥 THE ABSOLUTE NO-MERGE RULE FOR FACEBOOK 🔥
-    // Hum `+ba` use hi nahi karenge. Jo format_id aayegi wo pehle se Video+Audio dono contain karegi.
+    // We only fetch pre-merged formats to completely avoid dummy audio tracks.
     if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}/b`; // Only fetch the single pre-merged file
+      formatStr = `${format_id}/b`;
     } else {
-      formatStr = "b"; // Fallback to 'best' pre-merged file
+      formatStr = "b";
     }
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
@@ -359,6 +358,10 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
+      // 🔥 EXPLICIT AUDIO TRANSCODING FLAG 🔥
+      // This is the key to solving the browser mute issue on the "b" format fallback.
+      // Even if Facebook serves a weird codec in the pre-merged file, FFmpeg will force it to AAC.
+      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
     console.log("⏳ Running yt-dlp...");
