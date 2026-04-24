@@ -9,19 +9,6 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// 🔥 STATIC COOKIE FILE AUTHENTICATION FOR CLOUD DEPLOYMENT 🔥
-const possibleCookiePaths = [
-  path.join(process.cwd(), "www.facebook.com_cookies.txt"),
-  path.join(__dirname, "../../www.facebook.com_cookies.txt"),
-];
-let activeCookiePath = undefined;
-for (const p of possibleCookiePaths) {
-  if (fs.existsSync(p)) {
-    activeCookiePath = p;
-    break;
-  }
-}
-
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
 const detectPlatform = (url) => {
@@ -66,7 +53,8 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    cookies: activeCookiePath,
+    // 🔥 Wapas tere Opera wale logic par aaye hain. (Ensure Opera is closed!)
+    cookiesFromBrowser: "opera",
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -74,7 +62,7 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: activeCookiePath,
+    cookiesFromBrowser: "opera",
   },
   generic: {
     ...BASE,
@@ -127,13 +115,13 @@ const friendlyError = (rawMessage = "") => {
     m.includes("cookies") ||
     m.includes("403")
   )
-    return "Authentication failed. Facebook is blocking the request. Ensure your server's cookies.txt is valid.";
+    return "Facebook blocked the audio stream. Make sure Opera is closed so cookies can be extracted.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
   if (m.includes("rate") || m.includes("429"))
     return "Too many requests. Please wait a moment.";
-  return "Could not fetch media. Ensure the link is public and properly formatted.";
+  return "Could not fetch media. Make sure it is a valid, public video link.";
 };
 
 const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
@@ -185,8 +173,6 @@ const getMediaInfo = async (req, res) => {
 
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
-    } else if (platform === "facebook") {
-      targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
     }
 
     const options = getPlatformOptions(platform);
@@ -204,12 +190,6 @@ const getMediaInfo = async (req, res) => {
       .filter((f) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
-
-        // 🔥 FACEBOOK UI FIX: Display ONLY formats that natively contain BOTH audio and video.
-        if (platform === "facebook") {
-          return hasV && hasA;
-        }
-
         return VALID_EXTS.has((f.ext || "").toLowerCase()) || hasV || hasA;
       })
       .forEach((f) => {
@@ -318,14 +298,10 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
-    // 🔥 THE ABSOLUTE NO-MERGE RULE FOR FACEBOOK 🔥
-    // We only fetch pre-merged formats to completely avoid dummy audio tracks.
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}/b`;
-    } else {
-      formatStr = "b";
-    }
+    // 🚨 STRICT MODE: No more silent video fallbacks! 🚨
+    // We strictly command it to get BOTH video and audio ("bv+ba").
+    // If Facebook blocks the audio, yt-dlp will THROW AN ERROR instead of silently passing a mute 5MB file.
+    formatStr = "bv+ba";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
@@ -358,10 +334,6 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
-      // 🔥 EXPLICIT AUDIO TRANSCODING FLAG 🔥
-      // This is the key to solving the browser mute issue on the "b" format fallback.
-      // Even if Facebook serves a weird codec in the pre-merged file, FFmpeg will force it to AAC.
-      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
     console.log("⏳ Running yt-dlp...");
