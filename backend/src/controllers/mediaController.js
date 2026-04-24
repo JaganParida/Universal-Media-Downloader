@@ -9,6 +9,10 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
+// 🔥 STRICT CLOUD COOKIE PATH 🔥
+// Yeh code check karega ki Render server par teri cookies.txt file pahunchi hai ya nahi.
+const COOKIES_FILE = path.join(process.cwd(), "www.facebook.com_cookies.txt");
+
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
 const detectPlatform = (url) => {
@@ -53,16 +57,17 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // Maintaining Opera cookie extraction to bypass 403 Forbidden errors
-    cookiesFromBrowser: "opera",
-    // 🚨 CRITICAL FIX: Removed the Chrome 'addHeader' spoofing completely.
-    // Mixing Opera cookies with a Chrome User-Agent triggers Facebook's AI
-    // to feed us the fake 0-byte dummy audio tracks!
+    // 🚨 OPERA HATA DIYA HAI! Ab Render par koi crash nahi aayega.
+    // Sirf static .txt file use hogi authentication ke liye.
+    cookies: fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : undefined,
+    addHeader: [
+      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ],
   },
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookiesFromBrowser: "opera",
+    cookies: fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : undefined,
   },
   generic: {
     ...BASE,
@@ -115,13 +120,13 @@ const friendlyError = (rawMessage = "") => {
     m.includes("cookies") ||
     m.includes("403")
   )
-    return "Facebook blocked the stream. Please ensure Opera is closed so the backend can read the database.";
+    return "Authentication failed. Please ensure www.facebook.com_cookies.txt is pushed to Render server.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
   if (m.includes("rate") || m.includes("429"))
     return "Too many requests. Please wait a moment.";
-  return "Could not fetch media. Make sure it is a valid, public video link.";
+  return "Could not fetch media. Ensure the link is public.";
 };
 
 const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
@@ -173,9 +178,24 @@ const getMediaInfo = async (req, res) => {
 
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
+    } else if (platform === "facebook") {
+      // Bypassing desktop streams by forcing mobile url
+      targetUrl = targetUrl.replace(/(www\.)?facebook\.com/i, "m.facebook.com");
     }
 
     const options = getPlatformOptions(platform);
+
+    if (platform === "facebook") {
+      const isCookiePresent = fs.existsSync(COOKIES_FILE);
+      console.log(
+        `🍪 Render Server Cookie Check: ${COOKIES_FILE} | Exists: ${isCookiePresent}`,
+      );
+      if (!isCookiePresent) {
+        console.warn(
+          "⚠️ WARNING: cookies.txt is missing on the server! Facebook audio will fail.",
+        );
+      }
+    }
 
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
@@ -298,10 +318,10 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🔥 THE DASH BYPASS FIX 🔥
-    // We strictly demand "hd" or "sd" or "b" which are Facebook's native pre-merged formats.
-    // This forbids yt-dlp from downloading DASH streams, bypassing the silent audio trap entirely.
-    formatStr = "hd/sd/b";
+    // 🔥 ANTI-SILENT VIDEO FIX 🔥
+    // Mobile URL bypasses DASH trickery, and we strictly request pre-merged best audio/video.
+    targetUrl = targetUrl.replace(/(www\.)?facebook\.com/i, "m.facebook.com");
+    formatStr = "best[vcodec!=none][acodec!=none]/best";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
