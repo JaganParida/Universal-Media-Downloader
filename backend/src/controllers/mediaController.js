@@ -44,7 +44,6 @@ const BASE = {
   bufferSize: "16K",
 };
 
-// Point to the exported cookie file in the root backend directory
 const COOKIE_FILE_PATH = path.resolve(
   __dirname,
   "../../www.facebook.com_cookies.txt",
@@ -59,7 +58,6 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // Use the exported text file for cloud environments
     cookies: fs.existsSync(COOKIE_FILE_PATH) ? COOKIE_FILE_PATH : undefined,
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -114,6 +112,15 @@ const estimateSize = (f, durationSec) => {
 
 const friendlyError = (rawMessage = "") => {
   const m = rawMessage.toLowerCase();
+
+  // 🔥 NEW ERROR CATCH FOR DRM/MISSING AUDIO
+  if (
+    m.includes("requested format is not available") ||
+    m.includes("acodec!=none")
+  ) {
+    return "This reel uses copyrighted music from Facebook's library. The audio is protected and cannot be downloaded.";
+  }
+
   if (
     m.includes("sign in") ||
     m.includes("login") ||
@@ -122,7 +129,7 @@ const friendlyError = (rawMessage = "") => {
     m.includes("403") ||
     m.includes("database")
   )
-    return "Facebook blocked the stream. Please ensure the www.facebook.com_cookies.txt file contains fresh cookies and is pushed to the server.";
+    return "Facebook blocked the stream. Please ensure cookies are up to date.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -302,16 +309,12 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // Default fallback
-  let formatStr = "bv*+ba/b[acodec!=none]/b";
+  // Default fallback: Strictly require an audio codec. No more trailing `/b`.
+  let formatStr = "bv*+ba/b[acodec!=none]";
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // 🔥 STRICT AUDIO FALLBACK LOGIC
-    // 1. Try exact requested format merged with best audio
-    // 2. Fallback to best video + best audio
-    // 3. Fallback to the best single stream that EXPLICITLY contains an audio codec [acodec!=none]
-    // 4. Ultimate fallback to standard 'b' (if the video is natively silent)
-    formatStr = `${format_id}+ba/bv*+ba/b[acodec!=none]/b`;
+    // 🚨 STRICT MODE: If it can't find audio, CRASH. Do not serve a silent video.
+    formatStr = `${format_id}+ba/bv*+ba/b[acodec!=none]`;
   }
 
   console.log(
