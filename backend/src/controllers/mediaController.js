@@ -44,11 +44,6 @@ const BASE = {
   bufferSize: "16K",
 };
 
-const COOKIE_FILE_PATH = path.resolve(
-  __dirname,
-  "../../www.facebook.com_cookies.txt",
-);
-
 const PLATFORM_OPTIONS = {
   youtube: {
     ...BASE,
@@ -58,7 +53,8 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    cookies: fs.existsSync(COOKIE_FILE_PATH) ? COOKIE_FILE_PATH : undefined,
+    // 🔥 Wapas tere Opera wale logic par aaye hain. (Ensure Opera is closed!)
+    cookiesFromBrowser: "opera",
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -66,7 +62,7 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: fs.existsSync(COOKIE_FILE_PATH) ? COOKIE_FILE_PATH : undefined,
+    cookiesFromBrowser: "opera",
   },
   generic: {
     ...BASE,
@@ -112,24 +108,14 @@ const estimateSize = (f, durationSec) => {
 
 const friendlyError = (rawMessage = "") => {
   const m = rawMessage.toLowerCase();
-
-  // 🔥 NEW ERROR CATCH FOR DRM/MISSING AUDIO
-  if (
-    m.includes("requested format is not available") ||
-    m.includes("acodec!=none")
-  ) {
-    return "This reel uses copyrighted music from Facebook's library. The audio is protected and cannot be downloaded.";
-  }
-
   if (
     m.includes("sign in") ||
     m.includes("login") ||
     m.includes("age") ||
     m.includes("cookies") ||
-    m.includes("403") ||
-    m.includes("database")
+    m.includes("403")
   )
-    return "Facebook blocked the stream. Please ensure cookies are up to date.";
+    return "Facebook blocked the audio stream. Make sure Opera is closed so cookies can be extracted.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -309,12 +295,15 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // Default fallback: Strictly require an audio codec. No more trailing `/b`.
-  let formatStr = "bv*+ba/b[acodec!=none]";
+  let formatStr = "bv*+ba/b";
 
-  if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // 🚨 STRICT MODE: If it can't find audio, CRASH. Do not serve a silent video.
-    formatStr = `${format_id}+ba/bv*+ba/b[acodec!=none]`;
+  if (platform === "facebook") {
+    // 🚨 STRICT MODE: No more silent video fallbacks! 🚨
+    // We strictly command it to get BOTH video and audio ("bv+ba").
+    // If Facebook blocks the audio, yt-dlp will THROW AN ERROR instead of silently passing a mute 5MB file.
+    formatStr = "bv+ba";
+  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
+    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
   console.log(
