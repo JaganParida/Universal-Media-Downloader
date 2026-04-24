@@ -67,7 +67,6 @@ const PLATFORM_OPTIONS = {
     ...BASE,
     geoBypass: false,
     cookies: activeCookiePath,
-    // Add a highly generic user-agent to avoid immediate bot detection if cookies fail
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -187,24 +186,10 @@ const getMediaInfo = async (req, res) => {
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
     } else if (platform === "facebook") {
-      // Revert to standard URL processing. The m.facebook trick was causing "Cannot parse data" errors on Render.
-      // yt-dlp's default extractor is more stable with standard desktop URLs.
       targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
     }
 
     const options = getPlatformOptions(platform);
-
-    if (platform === "facebook") {
-      const isCookiePresent = fs.existsSync(COOKIES_FILE);
-      console.log(
-        `🍪 Render Server Cookie Check: ${COOKIES_FILE} | Exists: ${isCookiePresent}`,
-      );
-      if (!isCookiePresent) {
-        console.warn(
-          "⚠️ WARNING: cookies.txt is missing on the server! Facebook audio will likely fail.",
-        );
-      }
-    }
 
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
@@ -219,6 +204,13 @@ const getMediaInfo = async (req, res) => {
       .filter((f) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
+
+        // 🔥 FACEBOOK UI FIX: Sirf wahi formats frontend par bhejo jisme pehle se aawaz aur video dono hain!
+        // Isse frontend se mute/DASH formats puri tarah hide ho jayenge.
+        if (platform === "facebook") {
+          return hasV && hasA;
+        }
+
         return VALID_EXTS.has((f.ext || "").toLowerCase()) || hasV || hasA;
       })
       .forEach((f) => {
@@ -327,12 +319,14 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // Revert to desktop URL to prevent parsing errors on yt-dlp's side
     targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
-    // 🔥 BRUTE FORCE FALLBACK 🔥
-    // Try to merge. If Facebook sends a 403 or dummy audio, immediately fall back to the safest,
-    // lowest-common-denominator format ('b') which is almost guaranteed to have audio encoded.
-    formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/b";
+    // 🔥 THE ABSOLUTE NO-MERGE RULE FOR FACEBOOK 🔥
+    // Hum `+ba` use hi nahi karenge. Jo format_id aayegi wo pehle se Video+Audio dono contain karegi.
+    if (format_id && format_id !== "best" && format_id !== "undefined") {
+      formatStr = `${format_id}/b`; // Only fetch the single pre-merged file
+    } else {
+      formatStr = "b"; // Fallback to 'best' pre-merged file
+    }
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
@@ -365,8 +359,6 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
-      // Retain the audio transcoding to ensure browser compatibility if a merge happens
-      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
     console.log("⏳ Running yt-dlp...");
