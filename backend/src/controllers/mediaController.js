@@ -9,9 +9,18 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// 🔥 STRICT CLOUD COOKIE PATH 🔥
-// Yeh code check karega ki Render server par teri cookies.txt file pahunchi hai ya nahi.
-const COOKIES_FILE = path.join(process.cwd(), "www.facebook.com_cookies.txt");
+// 🔥 STATIC COOKIE FILE AUTHENTICATION FOR CLOUD DEPLOYMENT 🔥
+const possibleCookiePaths = [
+  path.join(process.cwd(), "www.facebook.com_cookies.txt"),
+  path.join(__dirname, "../../www.facebook.com_cookies.txt"),
+];
+let activeCookiePath = undefined;
+for (const p of possibleCookiePaths) {
+  if (fs.existsSync(p)) {
+    activeCookiePath = p;
+    break;
+  }
+}
 
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
@@ -57,9 +66,8 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // 🚨 OPERA HATA DIYA HAI! Ab Render par koi crash nahi aayega.
-    // Sirf static .txt file use hogi authentication ke liye.
-    cookies: fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : undefined,
+    cookies: activeCookiePath,
+    // Add a highly generic user-agent to avoid immediate bot detection if cookies fail
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -67,7 +75,7 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : undefined,
+    cookies: activeCookiePath,
   },
   generic: {
     ...BASE,
@@ -120,13 +128,13 @@ const friendlyError = (rawMessage = "") => {
     m.includes("cookies") ||
     m.includes("403")
   )
-    return "Authentication failed. Please ensure www.facebook.com_cookies.txt is pushed to Render server.";
+    return "Authentication failed. Facebook is blocking the request. Ensure your server's cookies.txt is valid.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
   if (m.includes("rate") || m.includes("429"))
     return "Too many requests. Please wait a moment.";
-  return "Could not fetch media. Ensure the link is public.";
+  return "Could not fetch media. Ensure the link is public and properly formatted.";
 };
 
 const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
@@ -179,8 +187,9 @@ const getMediaInfo = async (req, res) => {
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
     } else if (platform === "facebook") {
-      // Bypassing desktop streams by forcing mobile url
-      targetUrl = targetUrl.replace(/(www\.)?facebook\.com/i, "m.facebook.com");
+      // Revert to standard URL processing. The m.facebook trick was causing "Cannot parse data" errors on Render.
+      // yt-dlp's default extractor is more stable with standard desktop URLs.
+      targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
     }
 
     const options = getPlatformOptions(platform);
@@ -192,7 +201,7 @@ const getMediaInfo = async (req, res) => {
       );
       if (!isCookiePresent) {
         console.warn(
-          "⚠️ WARNING: cookies.txt is missing on the server! Facebook audio will fail.",
+          "⚠️ WARNING: cookies.txt is missing on the server! Facebook audio will likely fail.",
         );
       }
     }
@@ -318,10 +327,12 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🔥 ANTI-SILENT VIDEO FIX 🔥
-    // Mobile URL bypasses DASH trickery, and we strictly request pre-merged best audio/video.
-    targetUrl = targetUrl.replace(/(www\.)?facebook\.com/i, "m.facebook.com");
-    formatStr = "best[vcodec!=none][acodec!=none]/best";
+    // Revert to desktop URL to prevent parsing errors on yt-dlp's side
+    targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
+    // 🔥 BRUTE FORCE FALLBACK 🔥
+    // Try to merge. If Facebook sends a 403 or dummy audio, immediately fall back to the safest,
+    // lowest-common-denominator format ('b') which is almost guaranteed to have audio encoded.
+    formatStr = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/b";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
@@ -354,6 +365,7 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
+      // Retain the audio transcoding to ensure browser compatibility if a merge happens
       postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
