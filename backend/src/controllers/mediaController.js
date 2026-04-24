@@ -53,7 +53,7 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // 🔥 Wapas tere Opera wale logic par aaye hain. (Ensure Opera is closed!)
+    // Ensure Opera is closed so cookies can be extracted
     cookiesFromBrowser: "opera",
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -295,14 +295,14 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
+  // Default format string: Try best video + best audio, fallback to best combined stream
   let formatStr = "bv*+ba/b";
 
-  if (platform === "facebook") {
-    // 🚨 STRICT MODE: No more silent video fallbacks! 🚨
-    // We strictly command it to get BOTH video and audio ("bv+ba").
-    // If Facebook blocks the audio, yt-dlp will THROW AN ERROR instead of silently passing a mute 5MB file.
-    formatStr = "bv+ba";
-  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
+  if (format_id && format_id !== "best" && format_id !== "undefined") {
+    // If frontend passed a specific quality (format_id):
+    // 1. Try requested format merged with best audio.
+    // 2. Fallback to requested format alone (if it already has audio embedded, like Facebook Reels often do).
+    // 3. Ultimate fallback to standard best video/audio merge or best combined.
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
