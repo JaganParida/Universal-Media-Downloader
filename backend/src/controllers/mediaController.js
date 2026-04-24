@@ -44,6 +44,12 @@ const BASE = {
   bufferSize: "16K",
 };
 
+// Point to the exported cookie file in the root backend directory
+const COOKIE_FILE_PATH = path.resolve(
+  __dirname,
+  "../../www.facebook.com_cookies.txt",
+);
+
 const PLATFORM_OPTIONS = {
   youtube: {
     ...BASE,
@@ -53,8 +59,8 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // Ensure Opera is closed so cookies can be extracted
-    cookiesFromBrowser: "opera",
+    // Use the exported text file for cloud environments
+    cookies: fs.existsSync(COOKIE_FILE_PATH) ? COOKIE_FILE_PATH : undefined,
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -62,7 +68,7 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookiesFromBrowser: "opera",
+    cookies: fs.existsSync(COOKIE_FILE_PATH) ? COOKIE_FILE_PATH : undefined,
   },
   generic: {
     ...BASE,
@@ -113,9 +119,10 @@ const friendlyError = (rawMessage = "") => {
     m.includes("login") ||
     m.includes("age") ||
     m.includes("cookies") ||
-    m.includes("403")
+    m.includes("403") ||
+    m.includes("database")
   )
-    return "Facebook blocked the audio stream. Make sure Opera is closed so cookies can be extracted.";
+    return "Facebook blocked the stream. Please ensure the www.facebook.com_cookies.txt file contains fresh cookies and is pushed to the server.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -295,14 +302,9 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // Default format string: Try best video + best audio, fallback to best combined stream
   let formatStr = "bv*+ba/b";
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // If frontend passed a specific quality (format_id):
-    // 1. Try requested format merged with best audio.
-    // 2. Fallback to requested format alone (if it already has audio embedded, like Facebook Reels often do).
-    // 3. Ultimate fallback to standard best video/audio merge or best combined.
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
 
