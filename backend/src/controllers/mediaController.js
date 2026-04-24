@@ -302,14 +302,16 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  let formatStr = "bv*+ba/b";
+  // Default fallback
+  let formatStr = "bv*+ba/b[acodec!=none]/b";
 
   if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // 🔥 FIXED LOGIC: Removed the isolated `/${format_id}/` fallback.
-    // 1. Try: Requested Format + Best Audio
-    // 2. Fallback: Best Combined Stream 'b' (GUARANTEES AUDIO for FB/IG Reels)
-    // 3. Fallback: Best Video + Best Audio
-    formatStr = `${format_id}+ba/b/bv*+ba`;
+    // 🔥 STRICT AUDIO FALLBACK LOGIC
+    // 1. Try exact requested format merged with best audio
+    // 2. Fallback to best video + best audio
+    // 3. Fallback to the best single stream that EXPLICITLY contains an audio codec [acodec!=none]
+    // 4. Ultimate fallback to standard 'b' (if the video is natively silent)
+    formatStr = `${format_id}+ba/bv*+ba/b[acodec!=none]/b`;
   }
 
   console.log(
