@@ -9,20 +9,6 @@ const fs = require("fs");
 const os = require("os");
 const { cleanUrl } = require("../utils/helpers");
 
-// 🔥 STATIC COOKIE FILE AUTHENTICATION FOR CLOUD DEPLOYMENT 🔥
-// This ensures Render uses the static file instead of looking for a local browser.
-const possibleCookiePaths = [
-  path.join(process.cwd(), "www.facebook.com_cookies.txt"),
-  path.join(__dirname, "../../www.facebook.com_cookies.txt"),
-];
-let activeCookiePath = undefined;
-for (const p of possibleCookiePaths) {
-  if (fs.existsSync(p)) {
-    activeCookiePath = p;
-    break;
-  }
-}
-
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
 const detectPlatform = (url) => {
@@ -67,14 +53,16 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // Strictly use the static cookie file. Do NOT use cookiesFromBrowser.
-    cookies: activeCookiePath,
-    // Removed the spoofed User-Agent to avoid API detection mismatches
+    // Maintaining Opera cookie extraction to bypass 403 Forbidden errors
+    cookiesFromBrowser: "opera",
+    // 🚨 CRITICAL FIX: Removed the Chrome 'addHeader' spoofing completely.
+    // Mixing Opera cookies with a Chrome User-Agent triggers Facebook's AI
+    // to feed us the fake 0-byte dummy audio tracks!
   },
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookies: activeCookiePath,
+    cookiesFromBrowser: "opera",
   },
   generic: {
     ...BASE,
@@ -124,9 +112,10 @@ const friendlyError = (rawMessage = "") => {
     m.includes("sign in") ||
     m.includes("login") ||
     m.includes("age") ||
-    m.includes("cookies")
+    m.includes("cookies") ||
+    m.includes("403")
   )
-    return "This video requires active cookies. Please ensure your cookies.txt file is present and valid.";
+    return "Facebook blocked the stream. Please ensure Opera is closed so the backend can read the database.";
   if (m.includes("private"))
     return "This content is private and cannot be downloaded.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
@@ -309,10 +298,10 @@ const downloadMedia = async (req, res) => {
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🔥 THE ABSOLUTE ANTI-DUMMY AUDIO FIX 🔥
-    // Strictly demand a format where both video and audio are natively present in the same file.
-    // This completely bypasses yt-dlp attempting to merge a fake silent audio track.
-    formatStr = "best[vcodec!=none][acodec!=none]/best";
+    // 🔥 THE DASH BYPASS FIX 🔥
+    // We strictly demand "hd" or "sd" or "b" which are Facebook's native pre-merged formats.
+    // This forbids yt-dlp from downloading DASH streams, bypassing the silent audio trap entirely.
+    formatStr = "hd/sd/b";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
     formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
   }
@@ -345,8 +334,6 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
-      // 🔥 EXPLICIT AUDIO TRANSCODING FLAG 🔥
-      // Forces FFmpeg to transcode any weird Facebook audio formats into standard AAC.
       postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
