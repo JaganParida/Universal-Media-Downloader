@@ -1,6 +1,7 @@
 // File: src/controllers/mediaController.js
 //
 // Robust media downloader — YouTube · Facebook · Instagram · Generic
+// ZERO COOKIE VERSION - Focuses on public Instagram & YouTube links.
 
 const youtubedl = require("youtube-dl-exec");
 const path = require("path");
@@ -31,7 +32,7 @@ const normalizeYouTubeUrl = (url) => {
   return url;
 };
 
-// ─── BASE OPTIONS ───
+// ─── BASE OPTIONS (ZERO COOKIES) ───
 
 const BASE = {
   ffmpegLocation: ffmpegBin,
@@ -53,8 +54,7 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // 🔥 Wapas tere Opera wale logic par aaye hain. (Ensure Opera is closed!)
-    cookiesFromBrowser: "opera",
+    // Add a generic user-agent so we don't look completely like a bot
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -62,7 +62,6 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
-    cookiesFromBrowser: "opera",
   },
   generic: {
     ...BASE,
@@ -111,17 +110,14 @@ const friendlyError = (rawMessage = "") => {
   if (
     m.includes("sign in") ||
     m.includes("login") ||
-    m.includes("age") ||
-    m.includes("cookies") ||
+    m.includes("private") ||
     m.includes("403")
   )
-    return "Facebook blocked the audio stream. Make sure Opera is closed so cookies can be extracted.";
-  if (m.includes("private"))
-    return "This content is private and cannot be downloaded.";
+    return "This video is private or requires login. We only support downloading public links.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
   if (m.includes("rate") || m.includes("429"))
     return "Too many requests. Please wait a moment.";
-  return "Could not fetch media. Make sure it is a valid, public video link.";
+  return "Could not fetch media. Ensure the link is public and properly formatted.";
 };
 
 const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
@@ -173,6 +169,8 @@ const getMediaInfo = async (req, res) => {
 
     if (platform === "youtube") {
       targetUrl = normalizeYouTubeUrl(targetUrl);
+    } else if (platform === "facebook") {
+      targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
     }
 
     const options = getPlatformOptions(platform);
@@ -190,6 +188,11 @@ const getMediaInfo = async (req, res) => {
       .filter((f) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
+
+        // Return formats natively having audio and video for Facebook to prevent silent DASH issues
+        if (platform === "facebook") {
+          return hasV && hasA;
+        }
         return VALID_EXTS.has((f.ext || "").toLowerCase()) || hasV || hasA;
       })
       .forEach((f) => {
@@ -282,7 +285,7 @@ const downloadMedia = async (req, res) => {
   const { url, format_id, title } = req.query;
 
   console.log("\n==========================================");
-  console.log("🚀 [DOWNLOAD API] INITIALIZING DOWNLOAD...");
+  console.log("🚀 [DOWNLOAD API] INITIALIZING ZERO-COOKIE DOWNLOAD...");
 
   if (!url) return res.status(400).send("Missing URL");
 
@@ -295,15 +298,16 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
+  // Default format string designed to grab best video + best audio
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🚨 STRICT MODE: No more silent video fallbacks! 🚨
-    // We strictly command it to get BOTH video and audio ("bv+ba").
-    // If Facebook blocks the audio, yt-dlp will THROW AN ERROR instead of silently passing a mute 5MB file.
-    formatStr = "bv+ba";
+    // 🔥 ZERO COOKIE FACEBOOK FIX 🔥
+    // We only ask for 'b' (best pre-merged file) to avoid the 403 audio blocks completely.
+    formatStr = "b";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+ba/${format_id}/bv*+ba/b`;
+    // If a specific format was requested (e.g., from Instagram/YouTube)
+    formatStr = `${format_id}+ba/b`;
   }
 
   console.log(
@@ -334,6 +338,8 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
+      // Force ffmpeg to ensure the audio codec is universally playable (AAC) if it exists
+      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
     console.log("⏳ Running yt-dlp...");
