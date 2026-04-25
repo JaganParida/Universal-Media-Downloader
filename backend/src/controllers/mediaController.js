@@ -32,6 +32,17 @@ const normalizeYouTubeUrl = (url) => {
   return url;
 };
 
+// 🔥 INSTAGRAM URL CLEANER 🔥
+// Removes tracking tags like ?igsh= which trigger Instagram's login wall
+const normalizeInstagramUrl = (url) => {
+  try {
+    const u = new URL(url);
+    u.search = ""; // Strips all query parameters
+    return u.toString();
+  } catch (_) {}
+  return url;
+};
+
 // ─── BASE OPTIONS (ZERO COOKIES) ───
 
 const BASE = {
@@ -54,7 +65,6 @@ const PLATFORM_OPTIONS = {
   facebook: {
     ...BASE,
     geoBypass: false,
-    // Add a generic user-agent so we don't look completely like a bot
     addHeader: [
       "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ],
@@ -62,6 +72,11 @@ const PLATFORM_OPTIONS = {
   instagram: {
     ...BASE,
     geoBypass: true,
+    // 🔥 INSTAGRAM FAKE BROWSER FIX 🔥
+    // Added User-Agent so Instagram thinks we are a real browser, not a scraper bot.
+    addHeader: [
+      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ],
   },
   generic: {
     ...BASE,
@@ -171,6 +186,9 @@ const getMediaInfo = async (req, res) => {
       targetUrl = normalizeYouTubeUrl(targetUrl);
     } else if (platform === "facebook") {
       targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
+    } else if (platform === "instagram") {
+      // Clean Instagram URLs of tracking params
+      targetUrl = normalizeInstagramUrl(targetUrl);
     }
 
     const options = getPlatformOptions(platform);
@@ -189,7 +207,6 @@ const getMediaInfo = async (req, res) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
 
-        // Return formats natively having audio and video for Facebook to prevent silent DASH issues
         if (platform === "facebook") {
           return hasV && hasA;
         }
@@ -294,19 +311,19 @@ const downloadMedia = async (req, res) => {
   let targetUrl = cleanUrl(url);
   const platform = detectPlatform(targetUrl);
 
-  if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+  if (platform === "youtube") {
+    targetUrl = normalizeYouTubeUrl(targetUrl);
+  } else if (platform === "instagram") {
+    targetUrl = normalizeInstagramUrl(targetUrl);
+  }
 
   const options = getPlatformOptions(platform);
 
-  // Default format string designed to grab best video + best audio
   let formatStr = "bv*+ba/b";
 
   if (platform === "facebook") {
-    // 🔥 ZERO COOKIE FACEBOOK FIX 🔥
-    // We only ask for 'b' (best pre-merged file) to avoid the 403 audio blocks completely.
     formatStr = "b";
   } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    // If a specific format was requested (e.g., from Instagram/YouTube)
     formatStr = `${format_id}+ba/b`;
   }
 
@@ -338,7 +355,6 @@ const downloadMedia = async (req, res) => {
       output: tempFilePath,
       mergeOutputFormat: "mp4",
       verbose: true,
-      // Force ffmpeg to ensure the audio codec is universally playable (AAC) if it exists
       postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
     };
 
