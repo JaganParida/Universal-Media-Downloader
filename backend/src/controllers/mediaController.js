@@ -296,7 +296,6 @@ const getMediaInfo = async (req, res) => {
   }
 };
 
-
 // ─── downloadMedia ────────────────────────────────────────────────────────────
 
 const downloadMedia = async (req, res) => {
@@ -407,4 +406,3 @@ const downloadMedia = async (req, res) => {
 };
 
 module.exports = { getMediaInfo, downloadMedia };
-
