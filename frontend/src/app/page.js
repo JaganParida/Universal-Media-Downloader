@@ -774,12 +774,6 @@ export default function Home() {
                   gap between robust engineering logic and immersive user
                   experiences.
                 </p>
-                <p>
-                  My technical foundation is rooted in Data Structures &
-                  Algorithms using Java, where I actively solve complex problems
-                  on platforms like LeetCode and GeeksforGeeks to ensure every
-                  line of code I write is optimized, readable, and scalable.
-                </p>
               </div>
 
               <div className="mt-8 flex gap-4 justify-center sm:justify-start">
