@@ -14,9 +14,10 @@ const geistMono = Geist_Mono({
 export const metadata = {
   title: "Media Pro | High-Def Social Media Downloader",
   description:
-    "Securely download your favorite high-quality videos and audio from Instagram and Facebook in seconds.",
+    "Securely download your favorite high-quality videos and audio from Instagram, Facebook, and YouTube in seconds.",
   icons: {
-    icon: "icon.svg",
+    // ?v=1 lagane se browser hamesha naya icon fetch karega
+    icon: "/icon.svg?v=1",
   },
 };
 
