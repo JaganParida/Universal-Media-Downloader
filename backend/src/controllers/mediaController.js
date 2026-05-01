@@ -1,8 +1,3 @@
-// File: src/controllers/mediaController.js
-//
-// Robust media downloader — YouTube · Facebook · Instagram · Generic
-// ZERO COOKIE VERSION - Focuses on public Instagram & YouTube links.
-
 const youtubedl = require("youtube-dl-exec");
 const path = require("path");
 const ffmpegBin = require("ffmpeg-static");
@@ -21,6 +16,8 @@ const detectPlatform = (url) => {
   return "generic";
 };
 
+// ─── URL Normalizers ──────────────────────────────────────────────────────────
+
 const normalizeYouTubeUrl = (url) => {
   try {
     const u = new URL(url);
@@ -28,66 +25,93 @@ const normalizeYouTubeUrl = (url) => {
     if (shortsMatch) {
       return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
     }
+    // Keep only v= param for clean URL
+    const videoId = u.searchParams.get("v");
+    if (videoId && u.hostname.includes("youtube.com")) {
+      return `https://www.youtube.com/watch?v=${videoId}`;
+    }
+    // youtu.be short link
+    if (u.hostname === "youtu.be") {
+      const id = u.pathname.slice(1).split("/")[0];
+      if (id) return `https://www.youtube.com/watch?v=${id}`;
+    }
   } catch (_) {}
   return url;
 };
 
-// 🔥 INSTAGRAM URL CLEANER 🔥
-// Removes tracking tags like ?igsh= which trigger Instagram's login wall
 const normalizeInstagramUrl = (url) => {
   try {
     const u = new URL(url);
-    u.search = ""; // Strips all query parameters
-    return u.toString();
+    u.search = ""; // Strip tracking params (?igsh=, ?utm_, etc.)
+    u.hash = "";
+    // Make sure path ends correctly
+    let pathname = u.pathname;
+    if (!pathname.endsWith("/")) pathname += "/";
+    return `${u.protocol}//${u.hostname}${pathname}`;
   } catch (_) {}
   return url;
 };
 
-// ─── BASE OPTIONS (ZERO COOKIES) ───
+const normalizeFacebookUrl = (url) => {
+  return url
+    .replace(/m\.facebook\.com/i, "www.facebook.com")
+    .replace(/web\.facebook\.com/i, "www.facebook.com");
+};
+
+// ─── User Agents ──────────────────────────────────────────────────────────────
+
+const UA_DESKTOP =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
+const UA_INSTAGRAM_MOBILE =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
+
+// ─── BASE OPTIONS (ZERO COOKIES) ──────────────────────────────────────────────
 
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
   noWarnings: true,
-  retries: 5,
-  fragmentRetries: 5,
+  retries: 10,
+  fragmentRetries: 10,
   socketTimeout: 60,
   noPlaylist: true,
   bufferSize: "16K",
+  preferFreeFormats: true,
 };
 
 const PLATFORM_OPTIONS = {
   youtube: {
     ...BASE,
-    extractorArgs: "youtube:player_client=web",
+    // CRITICAL FIX: use android + web clients → bypasses most bot checks WITHOUT cookies
+    extractorArgs: "youtube:player_client=android,web;player_skip=configs",
     geoBypass: true,
+    addHeader: [`user-agent:${UA_DESKTOP}`],
   },
   facebook: {
     ...BASE,
-    geoBypass: false,
-    addHeader: [
-      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    ],
+    geoBypass: true,
+    addHeader: [`user-agent:${UA_DESKTOP}`, "accept-language:en-US,en;q=0.9"],
   },
   instagram: {
     ...BASE,
     geoBypass: true,
-    // 🔥 INSTAGRAM FAKE BROWSER FIX 🔥
-    // Added User-Agent so Instagram thinks we are a real browser, not a scraper bot.
     addHeader: [
-      "user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      `user-agent:${UA_INSTAGRAM_MOBILE}`,
+      "accept-language:en-US,en;q=0.9",
+      "x-ig-app-id:936619743392459",
     ],
   },
   generic: {
     ...BASE,
     geoBypass: true,
+    addHeader: [`user-agent:${UA_DESKTOP}`],
   },
 };
 
 const getPlatformOptions = (platform) =>
   PLATFORM_OPTIONS[platform] ?? PLATFORM_OPTIONS.generic;
 
-// ─── Resolution Bucketing ──────────────────────────────────────────────────────
+// ─── Resolution Bucketing ─────────────────────────────────────────────────────
 
 const bucketResolution = (width, height) => {
   const short = Math.min(width || 0, height || 0);
@@ -126,30 +150,34 @@ const friendlyError = (rawMessage = "") => {
     m.includes("sign in") ||
     m.includes("login") ||
     m.includes("private") ||
-    m.includes("403")
+    m.includes("confirm you're not a bot")
   )
-    return "This video is private or requires login. We only support downloading public links.";
+    return "This content is private or requires login. Only public links are supported.";
   if (m.includes("not found") || m.includes("404")) return "Content not found.";
   if (m.includes("rate") || m.includes("429"))
-    return "Too many requests. Please wait a moment.";
+    return "Too many requests. Please wait a moment and try again.";
+  if (m.includes("unavailable"))
+    return "This video is unavailable in your region or has been removed.";
+  if (m.includes("unsupported url"))
+    return "This URL is not supported. Please check the link.";
   return "Could not fetch media. Ensure the link is public and properly formatted.";
 };
 
-const withRetry = async (fn, maxAttempts = 3, delay = 2000) => {
+const withRetry = async (fn, maxAttempts = 3, delay = 1500) => {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      console.log(
-        `🔄 [RETRY LOG] Execution attempt ${attempt} of ${maxAttempts}...`,
-      );
+      console.log(`🔄 Attempt ${attempt}/${maxAttempts}...`);
       return await fn();
     } catch (err) {
       lastError = err;
-      console.error(`⚠️ [RETRY LOG] Attempt ${attempt} failed:`, err.message);
-      const isTransient = /network|timeout|connection|429/i.test(
-        err.message || "",
-      );
-      if (!isTransient || attempt === maxAttempts) throw err;
+      const msg = (err.message || err.stderr || "").toString();
+      console.error(`⚠️ Attempt ${attempt} failed:`, msg.slice(0, 200));
+      const isTransient =
+        /network|timeout|connection|429|temporar|ECONN|503|502/i.test(msg);
+      const isFatal = /private|login|not found|404|unsupported/i.test(msg);
+      if (isFatal || (!isTransient && attempt === maxAttempts)) throw err;
+      if (attempt === maxAttempts) throw err;
       await new Promise((r) => setTimeout(r, delay * attempt));
     }
   }
@@ -164,10 +192,17 @@ const findTempFile = (basePath) => {
   const base = path.basename(basePath, path.extname(basePath));
   try {
     const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
+    // Prefer non-fragment final files
     const finalFile = files.find(
-      (f) => !f.endsWith(".part") && !f.endsWith(".ytdl") && !/\.f\d/.test(f),
+      (f) =>
+        !f.endsWith(".part") &&
+        !f.endsWith(".ytdl") &&
+        !/\.f\d+\./.test(f) &&
+        !f.endsWith(".temp"),
     );
     if (finalFile) return path.join(dir, finalFile);
+    // Fallback: any file with the base
+    if (files.length > 0) return path.join(dir, files[0]);
   } catch (err) {}
   return null;
 };
@@ -182,14 +217,13 @@ const getMediaInfo = async (req, res) => {
     let targetUrl = cleanUrl(url);
     const platform = detectPlatform(targetUrl);
 
-    if (platform === "youtube") {
-      targetUrl = normalizeYouTubeUrl(targetUrl);
-    } else if (platform === "facebook") {
-      targetUrl = targetUrl.replace(/m\.facebook\.com/i, "www.facebook.com");
-    } else if (platform === "instagram") {
-      // Clean Instagram URLs of tracking params
+    if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+    else if (platform === "facebook")
+      targetUrl = normalizeFacebookUrl(targetUrl);
+    else if (platform === "instagram")
       targetUrl = normalizeInstagramUrl(targetUrl);
-    }
+
+    console.log(`📡 [INFO] Platform: ${platform} | URL: ${targetUrl}`);
 
     const options = getPlatformOptions(platform);
 
@@ -199,7 +233,7 @@ const getMediaInfo = async (req, res) => {
 
     const durationSec = output.duration || 0;
     const formats = Array.isArray(output.formats) ? output.formats : [];
-    const VALID_EXTS = new Set(["mp4", "m4a", "webm", "mkv"]);
+    const VALID_EXTS = new Set(["mp4", "m4a", "webm", "mkv", "mp3"]);
     const uniqueFormats = new Map();
 
     formats
@@ -207,8 +241,9 @@ const getMediaInfo = async (req, res) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
 
-        if (platform === "facebook") {
-          return hasV && hasA;
+        // For IG/FB: prefer progressive (combined) formats
+        if (platform === "facebook" || platform === "instagram") {
+          return hasV; // keep anything with video; we'll merge audio if needed
         }
         return VALID_EXTS.has((f.ext || "").toLowerCase()) || hasV || hasA;
       })
@@ -252,7 +287,7 @@ const getMediaInfo = async (req, res) => {
 
     if (uniqueFormats.size === 0) {
       uniqueFormats.set("Best", {
-        format_id: "b",
+        format_id: "best",
         cleanRes: "Best",
         sortValue: 9999,
         ext: "mp4",
@@ -292,7 +327,9 @@ const getMediaInfo = async (req, res) => {
       formats: cleanFormats,
     });
   } catch (error) {
-    return res.status(500).json({ error: friendlyError(error.message) });
+    const msg = (error.stderr || error.message || "").toString();
+    console.error("❌ [INFO ERROR]:", msg.slice(0, 500));
+    return res.status(500).json({ error: friendlyError(msg) });
   }
 };
 
@@ -302,7 +339,7 @@ const downloadMedia = async (req, res) => {
   const { url, format_id, title } = req.query;
 
   console.log("\n==========================================");
-  console.log("🚀 [DOWNLOAD API] INITIALIZING ZERO-COOKIE DOWNLOAD...");
+  console.log("🚀 [DOWNLOAD] INITIALIZING...");
 
   if (!url) return res.status(400).send("Missing URL");
 
@@ -311,25 +348,48 @@ const downloadMedia = async (req, res) => {
   let targetUrl = cleanUrl(url);
   const platform = detectPlatform(targetUrl);
 
-  if (platform === "youtube") {
-    targetUrl = normalizeYouTubeUrl(targetUrl);
-  } else if (platform === "instagram") {
+  if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+  else if (platform === "facebook") targetUrl = normalizeFacebookUrl(targetUrl);
+  else if (platform === "instagram")
     targetUrl = normalizeInstagramUrl(targetUrl);
-  }
+
+  console.log(`📡 Platform: ${platform} | URL: ${targetUrl}`);
 
   const options = getPlatformOptions(platform);
 
-  let formatStr = "bv*+ba/b";
+  // ═══ FORMAT STRING LOGIC ═══
+  let formatStr;
 
-  if (platform === "facebook") {
-    formatStr = "b";
-  } else if (format_id && format_id !== "best" && format_id !== "undefined") {
-    formatStr = `${format_id}+ba/b`;
+  if (platform === "youtube") {
+    if (format_id && format_id !== "best" && format_id !== "undefined") {
+      // Specific video format + best audio, merge
+      formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/best[ext=mp4]/best`;
+    } else {
+      formatStr =
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
+    }
+  } else if (platform === "instagram") {
+    // Instagram reels/posts often come as progressive. Try specific first, fallback to best combined.
+    if (format_id && format_id !== "best" && format_id !== "undefined") {
+      formatStr = `${format_id}+bestaudio/${format_id}/best[ext=mp4]/best`;
+    } else {
+      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
+    }
+  } else if (platform === "facebook") {
+    // Facebook: prefer combined progressive
+    if (format_id && format_id !== "best" && format_id !== "undefined") {
+      formatStr = `${format_id}/best[ext=mp4]/best`;
+    } else {
+      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
+    }
+  } else {
+    formatStr =
+      format_id && format_id !== "best" && format_id !== "undefined"
+        ? `${format_id}+bestaudio/${format_id}/best`
+        : "bestvideo+bestaudio/best";
   }
 
-  console.log(
-    `🎯 [DOWNLOAD API] Final Format String passed to yt-dlp: ${formatStr}`,
-  );
+  console.log(`🎯 Format string: ${formatStr}`);
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
@@ -354,26 +414,22 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      verbose: true,
-      postprocessorArgs: ["-c:a", "aac", "-c:v", "copy"],
+      // Ensure final container is mp4 with AAC audio for browser compatibility
+      postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
     };
 
-    console.log("⏳ Running yt-dlp...");
-    await withRetry(() => youtubedl(targetUrl, ytdlpOptions));
+    console.log("⏳ Running yt-dlp download...");
+    await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
 
     const actualFile = findTempFile(tempFilePath);
     if (!actualFile) throw new Error("Output file was not created by yt-dlp.");
 
     const stat = fs.statSync(actualFile);
-    console.log(
-      `📊 File created successfully. Exact Size: ${(stat.size / 1_048_576).toFixed(3)} MB`,
-    );
+    console.log(`📊 File size: ${(stat.size / 1_048_576).toFixed(2)} MB`);
 
     if (stat.size === 0) {
       cleanup();
-      throw new Error(
-        "Downloaded file is empty. The video may be unavailable.",
-      );
+      throw new Error("Downloaded file is empty. Video may be unavailable.");
     }
 
     const ext = path.extname(actualFile).slice(1) || "mp4";
@@ -399,9 +455,10 @@ const downloadMedia = async (req, res) => {
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
   } catch (error) {
-    console.error("❌ ERROR CAPTURED:", error.message);
+    const msg = (error.stderr || error.message || "").toString();
+    console.error("❌ [DOWNLOAD ERROR]:", msg.slice(0, 500));
     cleanup();
-    if (!res.headersSent) res.status(500).send(friendlyError(error.message));
+    if (!res.headersSent) res.status(500).send(friendlyError(msg));
   }
 };
 
