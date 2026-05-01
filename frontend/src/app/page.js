@@ -772,19 +772,13 @@ export default function Home() {
                   I am a 3rd-year Computer Science & Engineering student at
                   Centurion University (Class of '27), dedicated to bridging the
                   gap between robust engineering logic and immersive user
-                  experiences. My technical foundation is rooted in Data
-                  Structures & Algorithms using Java, where I actively solve
-                  complex problems on platforms like LeetCode and GeeksforGeeks
-                  to ensure every line of code I write is optimized, readable,
-                  and scalable.
+                  experiences.
                 </p>
                 <p>
-                  Beyond core engineering, I specialize in building intelligent,
-                  high-performance web applications using the MERN Stack,
-                  Next.js, and GSAP for interactive user interfaces. My current
-                  focus is on Agentic AI, where I leverage LangChain and MCP
-                  Servers to develop Autonomous Multi-Agent Systems that go
-                  beyond simple chat interactions to execute complex tasks.
+                  My technical foundation is rooted in Data Structures &
+                  Algorithms using Java, where I actively solve complex problems
+                  on platforms like LeetCode and GeeksforGeeks to ensure every
+                  line of code I write is optimized, readable, and scalable.
                 </p>
               </div>
 
