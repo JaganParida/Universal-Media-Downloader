@@ -16,7 +16,6 @@ export const metadata = {
   description:
     "Securely download your favorite high-quality videos and audio from Instagram, Facebook, and YouTube in seconds.",
   icons: {
-    // ?v=1 lagane se browser hamesha naya icon fetch karega
     icon: "/icon.svg?v=1",
   },
 };
