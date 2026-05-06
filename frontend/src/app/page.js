@@ -16,6 +16,9 @@ export default function Home() {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [imgError, setImgError] = useState(false);
 
+  // Search Extraction Timer State
+  const [searchTimer, setSearchTimer] = useState(0);
+
   // Modals State
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
@@ -26,6 +29,19 @@ export default function Home() {
 
   const dropdownContainerRef = useRef(null);
   const dropdownButtonRef = useRef(null);
+
+  // Live Timer Logic for Search/Extraction Phase
+  useEffect(() => {
+    let interval;
+    if (isLoading) {
+      interval = setInterval(() => {
+        setSearchTimer((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setSearchTimer(0); // Reset timer when loading stops
+    }
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -397,49 +413,87 @@ export default function Home() {
               </button>
             </form>
 
-            {/* Dynamic Warnings */}
-            <div className="px-3 h-5">
-              {isFacebook && (
-                <p className="text-xs text-[#aaaaaa] flex items-center gap-1.5 animate-in fade-in duration-300">
+            {/* Dynamic Warnings OR Extraction Timer */}
+            <div className="px-3 min-h-[48px] flex items-start">
+              {isLoading ? (
+                <div className="text-xs text-[#aaaaaa] flex items-start gap-2 animate-in fade-in duration-300">
                   <svg
-                    className="w-4 h-4 text-[#a855f7]"
+                    className="w-5 h-5 text-[#a855f7] animate-spin flex-shrink-0 mt-0.5"
                     fill="none"
-                    stroke="currentColor"
                     viewBox="0 0 24 24"
                   >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
                     <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
                   </svg>
                   <span>
-                    <strong>Note:</strong> Facebook videos will only contain
-                    audio if the underlying music is strictly public.
+                    <strong className="text-[#f1f1f1] text-sm">
+                      Extracting media details...{" "}
+                      <span className="text-[#a855f7]">({searchTimer}s)</span>
+                    </strong>
+                    <br />
+                    <span className="opacity-80">
+                      This process usually takes 10-30 seconds depending on the
+                      platform. Please be patient and do not refresh the page.
+                    </span>
                   </span>
-                </p>
-              )}
-              {isYouTube && (
-                <p className="text-xs text-[#aaaaaa] flex items-center gap-1.5 animate-in fade-in duration-300">
-                  <svg
-                    className="w-4 h-4 text-[#ff4e4e]"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    />
-                  </svg>
-                  <span>
-                    <strong>Requirement:</strong> Ensure the YouTube video is
-                    fully public. Private or unlisted videos cannot be fetched.
-                  </span>
-                </p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5 w-full">
+                  {isFacebook && (
+                    <p className="text-xs text-[#aaaaaa] flex items-center gap-1.5 animate-in fade-in duration-300">
+                      <svg
+                        className="w-4 h-4 text-[#a855f7]"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                      <span>
+                        <strong>Note:</strong> Facebook videos will only contain
+                        audio if the underlying music is strictly public.
+                      </span>
+                    </p>
+                  )}
+                  {isYouTube && (
+                    <p className="text-xs text-[#aaaaaa] flex items-center gap-1.5 animate-in fade-in duration-300">
+                      <svg
+                        className="w-4 h-4 text-[#ff4e4e]"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                        />
+                      </svg>
+                      <span>
+                        <strong>Requirement:</strong> Ensure the YouTube video
+                        is fully public. Private or unlisted videos cannot be
+                        fetched.
+                      </span>
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -644,7 +698,6 @@ export default function Home() {
             onClick={() => setIsProfileOpen(true)}
             className="flex items-center gap-4 px-5 py-3.5 bg-[#181818] hover:bg-[#202020] border border-[#272727] hover:border-[#3a3a3a] rounded-2xl transition-all shadow-lg group mx-auto w-fit"
           >
-            {/* Using the exact dark SVG from your screenshot */}
             <div className="w-12 h-12 rounded-full overflow-hidden border border-[#3f3f3f] bg-[#1e1e1e] flex items-center justify-center text-[#aaaaaa]">
               <svg
                 viewBox="0 0 24 24"
@@ -730,7 +783,6 @@ export default function Home() {
 
             <div className="p-6 sm:p-8">
               <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start">
-                {/* Fallback to exactly the grey user icon from your screenshot if image is missing */}
                 <div className="w-24 h-24 rounded-full overflow-hidden border border-[#3f3f3f] flex-shrink-0 bg-[#1e1e1e] flex items-center justify-center">
                   <img
                     src="/jagan-profile.jpg"
@@ -742,7 +794,6 @@ export default function Home() {
                       e.target.nextSibling.style.display = "block";
                     }}
                   />
-                  {/* Default Dark SVG inside popup */}
                   <svg
                     style={{ display: "none" }}
                     viewBox="0 0 24 24"
@@ -772,7 +823,19 @@ export default function Home() {
                   I am a 3rd-year Computer Science & Engineering student at
                   Centurion University (Class of '27), dedicated to bridging the
                   gap between robust engineering logic and immersive user
-                  experiences.
+                  experiences. My technical foundation is rooted in Data
+                  Structures & Algorithms using Java, where I actively solve
+                  complex problems on platforms like LeetCode and GeeksforGeeks
+                  to ensure every line of code I write is optimized, readable,
+                  and scalable.
+                </p>
+                <p>
+                  Beyond core engineering, I specialize in building intelligent,
+                  high-performance web applications using the MERN Stack,
+                  Next.js, and GSAP for interactive user interfaces. My current
+                  focus is on Agentic AI, where I leverage LangChain and MCP
+                  Servers to develop Autonomous Multi-Agent Systems that go
+                  beyond simple chat interactions to execute complex tasks.
                 </p>
               </div>
 
@@ -796,7 +859,6 @@ export default function Home() {
                   </svg>
                   GitHub
                 </a>
-                {/* Specifically requested Official LinkedIn Blue */}
                 <a
                   href="https://www.linkedin.com/in/jagan-parida04/"
                   target="_blank"
