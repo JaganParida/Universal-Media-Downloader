@@ -738,8 +738,8 @@ export default function Home() {
                     className="w-full h-full object-cover"
                     onError={(e) => {
                       e.target.onerror = null;
-                      e.target.style.display = "none"; // hide broken image tag
-                      e.target.nextSibling.style.display = "block"; // show inline SVG fallback
+                      e.target.style.display = "none";
+                      e.target.nextSibling.style.display = "block";
                     }}
                   />
                   {/* Default Dark SVG inside popup */}
