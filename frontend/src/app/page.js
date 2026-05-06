@@ -16,6 +16,9 @@ export default function Home() {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [imgError, setImgError] = useState(false);
 
+  // New State to prevent duplicate fetches
+  const [fetchedUrl, setFetchedUrl] = useState("");
+
   // Search Extraction Timer State
   const [searchTimer, setSearchTimer] = useState(0);
 
@@ -157,8 +160,13 @@ export default function Home() {
       setVideoData({ ...data, formats: perfectFormats });
 
       if (perfectFormats.length > 0) setSelectedFormatObj(perfectFormats[0]);
+
+      // Successfully fetched, so record this URL to prevent re-fetching
+      setFetchedUrl(url);
     } catch (err) {
       setError(err.message);
+      // On error, clear fetchedUrl so user can retry the same link if needed
+      setFetchedUrl("");
     } finally {
       setIsLoading(false);
     }
@@ -383,7 +391,8 @@ export default function Home() {
               </div>
               <button
                 type="submit"
-                disabled={isLoading || !url}
+                // Disabled if loading, empty url, OR if the url is already successfully fetched
+                disabled={isLoading || !url || url === fetchedUrl}
                 className="mt-3 sm:mt-0 px-8 py-3.5 bg-[#222222] border border-[#303030] sm:border-l-0 hover:bg-[#303030] text-[#f1f1f1] font-medium sm:rounded-r-full sm:rounded-l-none rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
               >
                 {isLoading ? (
@@ -407,6 +416,23 @@ export default function Home() {
                       d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                     ></path>
                   </svg>
+                ) : url === fetchedUrl && videoData ? (
+                  <>
+                    <svg
+                      className="w-5 h-5 text-green-500"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M5 13l4 4L19 7"
+                      ></path>
+                    </svg>
+                    Ready
+                  </>
                 ) : (
                   "Search"
                 )}
@@ -541,6 +567,17 @@ export default function Home() {
                     </span>
                   </div>
                 )}
+                <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                  <div className="w-16 h-16 bg-gradient-to-br from-[#8b5cf6] to-[#a855f7] rounded-full flex items-center justify-center shadow-lg">
+                    <svg
+                      className="w-8 h-8 text-white ml-1"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  </div>
+                </div>
               </div>
 
               <div className="p-5 sm:p-7 space-y-6">
