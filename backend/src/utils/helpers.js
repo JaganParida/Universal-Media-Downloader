@@ -1,6 +1,3 @@
-// File: src/utils/helpers.js
-
-// Tracking/noise parameters to strip from URLs
 const TRACKING_PARAMS = [
   "si",
   "igshid",
