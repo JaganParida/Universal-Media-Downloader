@@ -387,7 +387,7 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
+      postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart", // <--- Safe here, because output is MP4 container
     };
 
     console.log("⏳ Running yt-dlp download...");
@@ -589,8 +589,6 @@ const downloadAudio = async (req, res) => {
   const options = getPlatformOptions(platform);
 
   // ── Build format string ───────────────────────────────────────────────────
-  // For Instagram/Facebook: the format_id from getAudioInfo may point to a
-  // combined stream. We just download it and ffmpeg strips audio.
   let formatStr;
   if (platform === "instagram" || platform === "facebook") {
     // Use the real format_id if provided, otherwise fall back gracefully
@@ -646,17 +644,15 @@ const downloadAudio = async (req, res) => {
     const ytdlpOptions = {
       ...options,
       format: formatStr,
-      // No fixed extension — let yt-dlp pick whatever it downloads
       output: `${tempRawPath}.%(ext)s`,
     };
 
     console.log("⏳ Downloading audio with yt-dlp...");
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
 
-    // Find whichever file was actually written
-    const rawFile = findTempFile(tempRawPath);
-    if (!rawFile) {
-      // Try with .%(ext)s pattern — scan tmpdir for our base
+    // FIXED: Cleaned up redundant fallback logic here
+    let actualRawFile = findTempFile(tempRawPath);
+    if (!actualRawFile) {
       const dir = os.tmpdir();
       const base = path.basename(tempRawPath);
       const found = fs
@@ -666,28 +662,8 @@ const downloadAudio = async (req, res) => {
             f.startsWith(base) && !f.endsWith(".part") && !f.endsWith(".ytdl"),
         );
       if (!found) throw new Error("Audio file was not created by yt-dlp.");
-      // rawFile = path.join(dir, found);  // reassign not possible with const above
-      // use the found path directly below via a let
+      actualRawFile = path.join(dir, found);
     }
-
-    const actualRawFile =
-      rawFile ||
-      (() => {
-        const dir = os.tmpdir();
-        const base = path.basename(tempRawPath);
-        const found = fs
-          .readdirSync(dir)
-          .find(
-            (f) =>
-              f.startsWith(base) &&
-              !f.endsWith(".part") &&
-              !f.endsWith(".ytdl"),
-          );
-        return found ? path.join(dir, found) : null;
-      })();
-
-    if (!actualRawFile)
-      throw new Error("Audio file was not created by yt-dlp.");
 
     const rawStat = fs.statSync(actualRawFile);
     if (rawStat.size === 0) {
@@ -711,6 +687,7 @@ const downloadAudio = async (req, res) => {
       ffmpegArgs.push("-ss", String(start), "-to", String(end));
     }
 
+    // FIXED: REMOVED "-movflags" and "+faststart" from here since MP3s don't support moov atoms!
     ffmpegArgs.push(
       "-vn", // strip video track
       "-acodec",
@@ -719,8 +696,6 @@ const downloadAudio = async (req, res) => {
       "192k",
       "-ar",
       "44100",
-      "-movflags",
-      "+faststart",
       tempMp3Path,
     );
 
