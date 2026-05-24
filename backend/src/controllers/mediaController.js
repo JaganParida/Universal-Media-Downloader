@@ -25,12 +25,10 @@ const normalizeYouTubeUrl = (url) => {
     if (shortsMatch) {
       return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
     }
-    // Keep only v= param for clean URL
     const videoId = u.searchParams.get("v");
     if (videoId && u.hostname.includes("youtube.com")) {
       return `https://www.youtube.com/watch?v=${videoId}`;
     }
-    // youtu.be short link
     if (u.hostname === "youtu.be") {
       const id = u.pathname.slice(1).split("/")[0];
       if (id) return `https://www.youtube.com/watch?v=${id}`;
@@ -42,9 +40,8 @@ const normalizeYouTubeUrl = (url) => {
 const normalizeInstagramUrl = (url) => {
   try {
     const u = new URL(url);
-    u.search = ""; // Strip tracking params (?igsh=, ?utm_, etc.)
+    u.search = "";
     u.hash = "";
-    // Make sure path ends correctly
     let pathname = u.pathname;
     if (!pathname.endsWith("/")) pathname += "/";
     return `${u.protocol}//${u.hostname}${pathname}`;
@@ -65,7 +62,7 @@ const UA_DESKTOP =
 const UA_INSTAGRAM_MOBILE =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
 
-// ─── BASE OPTIONS (ZERO COOKIES) ──────────────────────────────────────────────
+// ─── BASE OPTIONS ─────────────────────────────────────────────────────────────
 
 const BASE = {
   ffmpegLocation: ffmpegBin,
@@ -82,7 +79,6 @@ const BASE = {
 const PLATFORM_OPTIONS = {
   youtube: {
     ...BASE,
-    // CRITICAL FIX: use android + web clients → bypasses most bot checks WITHOUT cookies
     extractorArgs: "youtube:player_client=android,web;player_skip=configs",
     geoBypass: true,
     addHeader: [`user-agent:${UA_DESKTOP}`],
@@ -192,7 +188,6 @@ const findTempFile = (basePath) => {
   const base = path.basename(basePath, path.extname(basePath));
   try {
     const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
-    // Prefer non-fragment final files
     const finalFile = files.find(
       (f) =>
         !f.endsWith(".part") &&
@@ -201,13 +196,12 @@ const findTempFile = (basePath) => {
         !f.endsWith(".temp"),
     );
     if (finalFile) return path.join(dir, finalFile);
-    // Fallback: any file with the base
     if (files.length > 0) return path.join(dir, files[0]);
   } catch (err) {}
   return null;
 };
 
-// ─── getMediaInfo ─────────────────────────────────────────────────────────────
+// ─── getMediaInfo (UNCHANGED) ─────────────────────────────────────────────────
 
 const getMediaInfo = async (req, res) => {
   const { url } = req.body;
@@ -240,10 +234,8 @@ const getMediaInfo = async (req, res) => {
       .filter((f) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
-
-        // For IG/FB: prefer progressive (combined) formats
         if (platform === "facebook" || platform === "instagram") {
-          return hasV; // keep anything with video; we'll merge audio if needed
+          return hasV;
         }
         return VALID_EXTS.has((f.ext || "").toLowerCase()) || hasV || hasA;
       })
@@ -333,7 +325,7 @@ const getMediaInfo = async (req, res) => {
   }
 };
 
-// ─── downloadMedia ────────────────────────────────────────────────────────────
+// ─── downloadMedia (UNCHANGED) ────────────────────────────────────────────────
 
 const downloadMedia = async (req, res) => {
   const { url, format_id, title } = req.query;
@@ -357,26 +349,22 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // ═══ FORMAT STRING LOGIC ═══
   let formatStr;
 
   if (platform === "youtube") {
     if (format_id && format_id !== "best" && format_id !== "undefined") {
-      // Specific video format + best audio, merge
       formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/best[ext=mp4]/best`;
     } else {
       formatStr =
         "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
     }
   } else if (platform === "instagram") {
-    // Instagram reels/posts often come as progressive. Try specific first, fallback to best combined.
     if (format_id && format_id !== "best" && format_id !== "undefined") {
       formatStr = `${format_id}+bestaudio/${format_id}/best[ext=mp4]/best`;
     } else {
       formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
     }
   } else if (platform === "facebook") {
-    // Facebook: prefer combined progressive
     if (format_id && format_id !== "best" && format_id !== "undefined") {
       formatStr = `${format_id}/best[ext=mp4]/best`;
     } else {
@@ -414,7 +402,6 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      // Ensure final container is mp4 with AAC audio for browser compatibility
       postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
     };
 
@@ -462,4 +449,317 @@ const downloadMedia = async (req, res) => {
   }
 };
 
-module.exports = { getMediaInfo, downloadMedia };
+// ─── NEW: getAudioInfo — extract audio-only info from any reel/video URL ─────
+
+const getAudioInfo = async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "URL is required" });
+
+  // Instagram /reels/audio/ pages are audio-catalogue pages, not actual video URLs.
+  // yt-dlp cannot extract downloadable streams from them.
+  if (/instagram\.com\/reels\/audio\//i.test(url)) {
+    return res.status(400).json({
+      error:
+        "Instagram audio-page links (instagram.com/reels/audio/...) cannot be downloaded directly. " +
+        "Please open an actual Reel that uses this audio, copy that Reel's URL, and paste it here instead. " +
+        "Example format: instagram.com/reel/ABC123xyz/",
+    });
+  }
+
+  try {
+    let targetUrl = cleanUrl(url);
+    const platform = detectPlatform(targetUrl);
+
+    if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+    else if (platform === "facebook")
+      targetUrl = normalizeFacebookUrl(targetUrl);
+    else if (platform === "instagram")
+      targetUrl = normalizeInstagramUrl(targetUrl);
+
+    console.log(`🎵 [AUDIO INFO] Platform: ${platform} | URL: ${targetUrl}`);
+
+    const options = getPlatformOptions(platform);
+    const output = await withRetry(() =>
+      youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
+    );
+
+    const durationSec = output.duration || 0;
+    const formats = Array.isArray(output.formats) ? output.formats : [];
+
+    // Collect audio-only formats
+    const audioFormats = formats
+      .filter((f) => {
+        const hasAudio = f.acodec && f.acodec !== "none";
+        const noVideo = !f.vcodec || f.vcodec === "none";
+        return hasAudio && noVideo;
+      })
+      .map((f) => {
+        const toMB = (bytes) => `${(bytes / 1_048_576).toFixed(1)} MB`;
+        let sizeString = "";
+        if (f.filesize) sizeString = toMB(f.filesize);
+        else if (f.filesize_approx) sizeString = `~${toMB(f.filesize_approx)}`;
+        else if (f.tbr && durationSec) {
+          const est = (f.tbr * 1000 * durationSec) / 8;
+          sizeString = `~${toMB(est)}`;
+        }
+        return {
+          format_id: f.format_id,
+          ext: f.ext || "m4a",
+          abr: f.abr || f.tbr || 0,
+          acodec: f.acodec,
+          filesize: sizeString,
+          quality: f.abr
+            ? `${Math.round(f.abr)}kbps`
+            : f.tbr
+              ? `~${Math.round(f.tbr)}kbps`
+              : "Audio",
+        };
+      })
+      .sort((a, b) => (b.abr || 0) - (a.abr || 0));
+
+    // Deduplicate by quality bucket
+    const seen = new Set();
+    const uniqueAudio = audioFormats.filter((f) => {
+      const bucket = Math.round((f.abr || 0) / 32) * 32;
+      const key = `${bucket}_${f.ext}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // Always add a "Best Audio" fallback
+    if (uniqueAudio.length === 0) {
+      uniqueAudio.push({
+        format_id: "bestaudio",
+        ext: "m4a",
+        abr: 0,
+        quality: "Best Available",
+        filesize: "",
+      });
+    }
+
+    return res.json({
+      title: output.title || "Audio",
+      thumbnail: output.thumbnail || null,
+      duration: durationSec,
+      platform,
+      audioFormats: uniqueAudio,
+    });
+  } catch (error) {
+    const msg = (error.stderr || error.message || "").toString();
+    console.error("❌ [AUDIO INFO ERROR]:", msg.slice(0, 500));
+    return res.status(500).json({ error: friendlyError(msg) });
+  }
+};
+
+// ─── NEW: downloadAudio — download audio-only as MP3 with optional trim ───────
+
+const downloadAudio = async (req, res) => {
+  const { url, format_id, title, startTime, endTime } = req.query;
+
+  console.log("\n==========================================");
+  console.log("🎵 [AUDIO DOWNLOAD] INITIALIZING...");
+  console.log(`   startTime: ${startTime}, endTime: ${endTime}`);
+
+  if (!url) return res.status(400).send("Missing URL");
+
+  const safeTitle =
+    (title || "audio").replace(/[^\w\s\-]/gi, "").trim() || "audio";
+  let targetUrl = cleanUrl(url);
+  const platform = detectPlatform(targetUrl);
+
+  if (platform === "youtube") targetUrl = normalizeYouTubeUrl(targetUrl);
+  else if (platform === "facebook") targetUrl = normalizeFacebookUrl(targetUrl);
+  else if (platform === "instagram")
+    targetUrl = normalizeInstagramUrl(targetUrl);
+
+  const options = getPlatformOptions(platform);
+
+  // Build format string for audio only
+  let formatStr = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best";
+  if (format_id && format_id !== "bestaudio" && format_id !== "undefined") {
+    formatStr = `${format_id}/bestaudio/best`;
+  }
+
+  const tempBase = `aud_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const tempRawPath = path.join(os.tmpdir(), `${tempBase}_raw.m4a`);
+  const tempMp3Path = path.join(os.tmpdir(), `${tempBase}.mp3`);
+
+  const cleanup = () => {
+    [tempRawPath, tempMp3Path].forEach((f) => {
+      try {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      } catch (_) {}
+    });
+    // Also cleanup any yt-dlp fragment files
+    try {
+      const dir = path.dirname(tempRawPath);
+      const base = path.basename(tempRawPath, path.extname(tempRawPath));
+      fs.readdirSync(dir)
+        .filter((f) => f.startsWith(base))
+        .forEach((f) => {
+          try {
+            fs.unlinkSync(path.join(dir, f));
+          } catch (_) {}
+        });
+    } catch (_) {}
+  };
+
+  try {
+    // Step 1: Download raw audio via yt-dlp
+    const ytdlpOptions = {
+      ...options,
+      format: formatStr,
+      output: tempRawPath,
+    };
+
+    console.log("⏳ Downloading audio with yt-dlp...");
+    await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
+
+    const rawFile = findTempFile(tempRawPath);
+    if (!rawFile) throw new Error("Audio file was not created by yt-dlp.");
+
+    const rawStat = fs.statSync(rawFile);
+    if (rawStat.size === 0) {
+      cleanup();
+      throw new Error("Downloaded audio is empty.");
+    }
+
+    // Step 2: Convert to MP3 with optional trim using ffmpeg
+    const { execFile } = require("child_process");
+    const ffmpegArgs = ["-i", rawFile, "-y"];
+
+    // Apply trim if provided
+    const start = parseFloat(startTime);
+    const end = parseFloat(endTime);
+    const hasTrim = !isNaN(start) && !isNaN(end) && end > start;
+
+    if (hasTrim) {
+      console.log(`✂️  Trimming audio: ${start}s → ${end}s`);
+      ffmpegArgs.push("-ss", String(start), "-to", String(end));
+    }
+
+    ffmpegArgs.push(
+      "-vn",
+      "-acodec",
+      "libmp3lame",
+      "-ab",
+      "192k",
+      "-ar",
+      "44100",
+      "-movflags",
+      "+faststart",
+      tempMp3Path,
+    );
+
+    await new Promise((resolve, reject) => {
+      execFile(ffmpegBin, ffmpegArgs, (err, stdout, stderr) => {
+        if (err) {
+          console.error("❌ FFmpeg error:", stderr?.slice(0, 300));
+          reject(
+            new Error(
+              "Audio conversion failed: " +
+                (stderr?.slice(0, 200) || err.message),
+            ),
+          );
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    if (!fs.existsSync(tempMp3Path)) throw new Error("MP3 conversion failed.");
+
+    const mp3Stat = fs.statSync(tempMp3Path);
+    if (mp3Stat.size === 0) throw new Error("Converted MP3 is empty.");
+
+    console.log(`✅ MP3 ready: ${(mp3Stat.size / 1_048_576).toFixed(2)} MB`);
+
+    const downloadName = hasTrim
+      ? `${safeTitle}_ringtone.mp3`
+      : `${safeTitle}.mp3`;
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Length", mp3Stat.size);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${downloadName}"`,
+    );
+
+    const stream = fs.createReadStream(tempMp3Path);
+    stream.pipe(res);
+    stream.on("error", () => cleanup());
+    res.on("finish", () => cleanup());
+    res.on("close", () => cleanup());
+  } catch (error) {
+    const msg = (error.stderr || error.message || "").toString();
+    console.error("❌ [AUDIO DOWNLOAD ERROR]:", msg.slice(0, 500));
+    cleanup();
+    if (!res.headersSent) res.status(500).send(friendlyError(msg));
+  }
+};
+
+// ─── NEW: searchSong — search YouTube for a song by name ─────────────────────
+
+const searchSong = async (req, res) => {
+  const { query } = req.query;
+  if (!query || !query.trim())
+    return res.status(400).json({ error: "Search query is required" });
+
+  try {
+    console.log(`🔍 [SONG SEARCH] Query: "${query}"`);
+
+    const searchUrl = `ytsearch8:${query.trim()} audio`;
+
+    const output = await withRetry(() =>
+      youtubedl(searchUrl, {
+        ...PLATFORM_OPTIONS.youtube,
+        dumpSingleJson: true,
+        flatPlaylist: true,
+        noPlaylist: false, // allow playlist-style search results
+      }),
+    );
+
+    // yt-dlp ytsearch returns entries array
+    const entries = Array.isArray(output.entries)
+      ? output.entries
+      : output.url
+        ? [output]
+        : [];
+
+    const results = entries
+      .filter((e) => e && (e.id || e.url))
+      .slice(0, 8)
+      .map((e) => ({
+        id: e.id || "",
+        title: e.title || "Unknown",
+        duration: e.duration || 0,
+        thumbnail:
+          e.thumbnail ||
+          (e.thumbnails && e.thumbnails.length > 0
+            ? e.thumbnails[e.thumbnails.length - 1].url
+            : null),
+        url:
+          e.url || e.webpage_url || `https://www.youtube.com/watch?v=${e.id}`,
+        uploader: e.uploader || e.channel || "",
+        view_count: e.view_count || 0,
+      }));
+
+    console.log(`✅ Found ${results.length} results`);
+    return res.json({ results });
+  } catch (error) {
+    const msg = (error.stderr || error.message || "").toString();
+    console.error("❌ [SEARCH ERROR]:", msg.slice(0, 500));
+    return res
+      .status(500)
+      .json({ error: "Song search failed. Please try again." });
+  }
+};
+
+module.exports = {
+  getMediaInfo,
+  downloadMedia,
+  getAudioInfo,
+  downloadAudio,
+  searchSong,
+};
