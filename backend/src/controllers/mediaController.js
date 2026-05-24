@@ -133,10 +133,25 @@ const estimateSize = (f, durationSec) => {
   return { sizeString: "", sizeValueForSort: 0 };
 };
 
-// 👇 MODIFIED: We are forcing the backend to ALWAYS return the raw error
-// to your frontend so we can debug exactly what is crashing.
 const friendlyError = (rawMessage = "") => {
-  return rawMessage || "Unknown Server Error occurred.";
+  const m = rawMessage.toLowerCase();
+  if (
+    m.includes("sign in") ||
+    m.includes("login") ||
+    m.includes("private") ||
+    m.includes("confirm you're not a bot")
+  )
+    return "This content is private or requires login. Only public links are supported.";
+  if (m.includes("not found") || m.includes("404")) return "Content not found.";
+  if (m.includes("rate") || m.includes("429"))
+    return "Too many requests. Please wait a moment and try again.";
+  if (m.includes("unavailable"))
+    return "This video is unavailable in your region or has been removed.";
+  if (m.includes("unsupported url"))
+    return "This URL is not supported. Please check the link.";
+  if (m.includes("no video formats"))
+    return "No downloadable formats found. The content may be restricted.";
+  return "Could not fetch media. Ensure the link is public and properly formatted.";
 };
 
 const withRetry = async (fn, maxAttempts = 2, delay = 1500) => {
@@ -563,32 +578,22 @@ const downloadAudio = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  let formatStr;
-  if (platform === "instagram" || platform === "facebook") {
-    if (
-      format_id &&
-      format_id !== "bestaudio" &&
-      format_id !== "undefined" &&
-      format_id !== "best"
-    ) {
-      formatStr = `${format_id}/bestaudio/best`;
-    } else {
-      formatStr = "bestaudio/best[ext=mp4]/best";
-    }
+  // 👇 FIX: Extremely strict format string to force yt-dlp to download an AUDIO track!
+  // If it can't find standalone audio, it will download both and merge them into an MKV.
+  let cleanFormat = format_id;
+  if (
+    !cleanFormat ||
+    cleanFormat === "auto" ||
+    cleanFormat === "undefined" ||
+    cleanFormat === "best" ||
+    cleanFormat === "bestaudio"
+  ) {
+    cleanFormat = "bestaudio/bestvideo+bestaudio/best";
   } else {
-    if (
-      format_id &&
-      format_id !== "bestaudio" &&
-      format_id !== "undefined" &&
-      format_id !== "best"
-    ) {
-      formatStr = `${format_id}/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best`;
-    } else {
-      formatStr = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best";
-    }
+    cleanFormat = `${cleanFormat}+bestaudio/bestaudio/bestvideo+bestaudio/best`;
   }
 
-  console.log(`🎯 Audio format string: ${formatStr}`);
+  console.log(`🎯 Audio format string: ${cleanFormat}`);
 
   const tempBase = `aud_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempRawPath = path.join(os.tmpdir(), `${tempBase}_raw`);
@@ -614,8 +619,10 @@ const downloadAudio = async (req, res) => {
   try {
     const ytdlpOptions = {
       ...options,
-      format: formatStr,
+      format: cleanFormat,
       output: `${tempRawPath}.%(ext)s`,
+      // 👇 FIX: Allows yt-dlp to merge separated video+audio files if needed!
+      mergeOutputFormat: "mkv",
     };
 
     console.log("⏳ Downloading audio with yt-dlp...");
@@ -709,8 +716,6 @@ const downloadAudio = async (req, res) => {
     const msg = (error.stderr || error.message || "").toString();
     console.error("❌ [AUDIO DOWNLOAD ERROR]:", msg.slice(0, 500));
     cleanup();
-
-    // 👇 FINALLY UNMASKED: Sends the full error text to your browser!
     if (!res.headersSent) res.status(500).send(friendlyError(msg));
   }
 };
