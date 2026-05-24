@@ -1,4 +1,4 @@
-//server.js
+// server.js
 const express = require("express");
 const cors = require("cors");
 const https = require("https");
@@ -8,11 +8,9 @@ const mediaRoutes = require("./routes/mediaRoutes");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ─── CORS + Security Headers (FIRST — before all routes) ─────────────────────
+// ─── CORS + Security Headers ──────────────────────────────────────────────────
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
-  // Allow all origins (you can restrict later via ALLOWED_ORIGINS env var)
   res.setHeader("Access-Control-Allow-Origin", origin || "*");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader(
@@ -27,17 +25,11 @@ app.use((req, res, next) => {
     "Access-Control-Expose-Headers",
     "Content-Length, Content-Disposition, Content-Type",
   );
-
-  // These three are CRITICAL — they lift browser same-origin blocking
-  // for images, fonts, and media loaded cross-origin
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
   res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
 
-  // Handle preflight immediately
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+  if (req.method === "OPTIONS") return res.status(200).end();
   next();
 });
 
@@ -46,8 +38,6 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // ─── Thumbnail Proxy ──────────────────────────────────────────────────────────
-// Proxies remote thumbnail images through your server so the browser
-// never sees a cross-origin image block (fixes ERR_BLOCKED_BY_RESPONSE)
 app.get("/api/thumbnail", (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: "Missing url param" });
@@ -59,13 +49,12 @@ app.get("/api/thumbnail", (req, res) => {
     return res.status(400).json({ error: "Invalid URL" });
   }
 
-  // Only proxy known safe image hosts
   const allowedHosts = [
     "scontent.cdninstagram.com",
-    "scontent-", // Instagram CDN prefix
-    "i.ytimg.com", // YouTube thumbnails
+    "scontent-",
+    "i.ytimg.com",
     "img.youtube.com",
-    "lookaside.fbsbx.com", // Facebook
+    "lookaside.fbsbx.com",
     "external.xx.fbcdn.net",
     "video.xx.fbcdn.net",
     "scontent.xx.fbcdn.net",
@@ -74,9 +63,8 @@ app.get("/api/thumbnail", (req, res) => {
   const hostOk = allowedHosts.some(
     (h) => targetUrl.hostname === h || targetUrl.hostname.startsWith(h),
   );
-  if (!hostOk) {
+  if (!hostOk)
     return res.status(403).json({ error: "Host not allowed for proxy" });
-  }
 
   const transport = targetUrl.protocol === "https:" ? https : http;
   const proxyReq = transport.get(
@@ -91,9 +79,8 @@ app.get("/api/thumbnail", (req, res) => {
       },
     },
     (proxyRes) => {
-      if (proxyRes.statusCode !== 200) {
+      if (proxyRes.statusCode !== 200)
         return res.status(proxyRes.statusCode).end();
-      }
       res.setHeader(
         "Content-Type",
         proxyRes.headers["content-type"] || "image/jpeg",
@@ -123,7 +110,7 @@ app.get("/", (_req, res) => {
   res.json({
     status: "ok",
     message: "MediaPro API is running",
-    version: "2.1.0",
+    version: "2.2.0",
     endpoints: {
       info: "POST /api/info",
       download: "GET /api/download",
@@ -143,9 +130,8 @@ app.use((req, res) => {
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, _req, res, _next) => {
   console.error("💥 Unhandled error:", err.message);
-  if (!res.headersSent) {
+  if (!res.headersSent)
     res.status(500).json({ error: err.message || "Internal server error" });
-  }
 });
 
 app.listen(PORT, () => {

@@ -1,4 +1,3 @@
-//page.js
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 
@@ -22,15 +21,29 @@ const formatViews = (n) => {
   return `${n} views`;
 };
 
-// ─── Proxy thumbnail URL through our backend to avoid CORS/COEP blocks ────────
-// Instagram CDN images are blocked by ERR_BLOCKED_BY_RESPONSE.NotSameOrigin
-// when loaded directly. Routing through our proxy fixes this.
+// ─── Sanitize format_id before sending to backend ─────────────────────────────
+// Prevents selector strings like "bestaudio/best" from being sent as format_id,
+// which caused 500 errors. The backend now also guards against this, but
+// defence-in-depth is better.
+const sanitizeFormatId = (id) => {
+  if (!id) return "auto";
+  if (
+    id === "best" ||
+    id === "undefined" ||
+    id === "bestaudio" ||
+    id === "auto"
+  )
+    return "auto";
+  // Real yt-dlp format IDs are numeric or short alphanumeric; no slashes/brackets
+  if (/[/+[\]()]/.test(id)) return "auto";
+  return id;
+};
+
+// ─── Proxy thumbnail URL through backend ─────────────────────────────────────
 const proxyThumbnail = (url) => {
   if (!url) return null;
-  // YouTube thumbnails (i.ytimg.com) don't need proxying
   if (url.includes("i.ytimg.com") || url.includes("img.youtube.com"))
     return url;
-  // Instagram and Facebook CDN images need the proxy
   if (
     url.includes("cdninstagram.com") ||
     url.includes("fbcdn.net") ||
@@ -42,7 +55,7 @@ const proxyThumbnail = (url) => {
   return url;
 };
 
-// ─── WhatsApp Share Helper ────────────────────────────────────────────────────
+// ─── WhatsApp Share ───────────────────────────────────────────────────────────
 const shareOnWhatsApp = (text) => {
   const encoded = encodeURIComponent(text);
   window.open(
@@ -64,10 +77,9 @@ const copyToClipboard = async (text) => {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function Home() {
-  // ── Active Tab ──────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState("video");
 
-  // ── Video Tab State ──────────────────────────────────────────────────────────
+  // ── Video Tab ────────────────────────────────────────────────────────────────
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [videoData, setVideoData] = useState(null);
@@ -81,15 +93,14 @@ export default function Home() {
   const [fetchedUrl, setFetchedUrl] = useState("");
   const [searchTimer, setSearchTimer] = useState(0);
 
-  // ── Share & Copy State ───────────────────────────────────────────────────────
+  // ── Share & Copy ─────────────────────────────────────────────────────────────
   const [copySuccess, setCopySuccess] = useState(false);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
   const [audioShareMenuOpen, setAudioShareMenuOpen] = useState(false);
 
-  // ── Audio Tab State ──────────────────────────────────────────────────────────
+  // ── Audio Tab ────────────────────────────────────────────────────────────────
   const [audioTab, setAudioTab] = useState("reel");
 
-  // Reel Audio State
   const [reelUrl, setReelUrl] = useState("");
   const [reelLoading, setReelLoading] = useState(false);
   const [reelData, setReelData] = useState(null);
@@ -102,13 +113,12 @@ export default function Home() {
   const [audioDownloadProgress, setAudioDownloadProgress] = useState(0);
   const [reelImgError, setReelImgError] = useState(false);
 
-  // Ringtone Trimmer State
   const [trimEnabled, setTrimEnabled] = useState(false);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(30);
   const trimDuration = reelData?.duration || 0;
 
-  // Song Search State
+  // ── Song Search ──────────────────────────────────────────────────────────────
   const [songQuery, setSongQuery] = useState("");
   const [songSearchLoading, setSongSearchLoading] = useState(false);
   const [songResults, setSongResults] = useState([]);
@@ -121,11 +131,11 @@ export default function Home() {
   const [downloadHistory, setDownloadHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
-  // ── Paste from Clipboard ─────────────────────────────────────────────────────
+  // ── Paste Loading ─────────────────────────────────────────────────────────────
   const [pasteLoading, setPasteLoading] = useState(false);
   const [reelPasteLoading, setReelPasteLoading] = useState(false);
 
-  // ── Modals State ──────────────────────────────────────────────────────────────
+  // ── Modals ────────────────────────────────────────────────────────────────────
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [feedbackType, setFeedbackType] = useState("Bug Report");
@@ -137,7 +147,7 @@ export default function Home() {
   const shareMenuRef = useRef(null);
   const audioShareMenuRef = useRef(null);
 
-  // ── Load history from localStorage ───────────────────────────────────────────
+  // ── History from localStorage ─────────────────────────────────────────────────
   useEffect(() => {
     try {
       const stored = localStorage.getItem("mediapro_history");
@@ -165,7 +175,7 @@ export default function Home() {
     } catch (_) {}
   };
 
-  // ── Timers ───────────────────────────────────────────────────────────────────
+  // ── Timers ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     let interval;
     if (isLoading) {
@@ -186,7 +196,7 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [reelLoading]);
 
-  // ── Outside Click Handlers ────────────────────────────────────────────────────
+  // ── Outside Click ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e) => {
       if (
@@ -216,7 +226,6 @@ export default function Home() {
       isProfileOpen || isFeedbackOpen || showHistory ? "hidden" : "unset";
   }, [isProfileOpen, isFeedbackOpen, showHistory]);
 
-  // Sync trimEnd when duration loads
   useEffect(() => {
     if (trimDuration > 0) {
       setTrimStart(0);
@@ -224,14 +233,13 @@ export default function Home() {
     }
   }, [trimDuration]);
 
-  // ── Paste from Clipboard ──────────────────────────────────────────────────────
+  // ── Clipboard Paste ───────────────────────────────────────────────────────────
   const handlePasteFromClipboard = async (setter) => {
     setPasteLoading(true);
     try {
       const text = await navigator.clipboard.readText();
-      if (text && (text.startsWith("http://") || text.startsWith("https://"))) {
+      if (text && (text.startsWith("http://") || text.startsWith("https://")))
         setter(text);
-      }
     } catch (_) {
     } finally {
       setPasteLoading(false);
@@ -252,7 +260,7 @@ export default function Home() {
     }
   };
 
-  // ── Video Tab Helpers ─────────────────────────────────────────────────────────
+  // ── Video helpers ──────────────────────────────────────────────────────────────
   const toggleDropdown = () => {
     if (!isDropdownOpen && dropdownButtonRef.current) {
       const rect = dropdownButtonRef.current.getBoundingClientRect();
@@ -356,7 +364,11 @@ export default function Home() {
     setIsDownloading(true);
     setDownloadProgress(0);
     setIsDropdownOpen(false);
-    const downloadUrl = `${API_BASE}/api/download?url=${encodeURIComponent(url)}&format_id=${selectedFormatObj.format_id}&title=${encodeURIComponent(videoData.title)}`;
+
+    // Sanitize format_id — never send selector strings to the backend
+    const cleanFormatId = sanitizeFormatId(selectedFormatObj.format_id);
+
+    const downloadUrl = `${API_BASE}/api/download?url=${encodeURIComponent(url)}&format_id=${encodeURIComponent(cleanFormatId)}&title=${encodeURIComponent(videoData.title)}`;
     try {
       const response = await fetch(downloadUrl);
       if (!response.ok) {
@@ -446,7 +458,7 @@ export default function Home() {
     url.toLowerCase().includes("youtube.com") ||
     url.toLowerCase().includes("youtu.be");
 
-  // ── Share helpers ─────────────────────────────────────────────────────────────
+  // ── Share helpers ──────────────────────────────────────────────────────────────
   const handleShareVideo = async (platform) => {
     const text = `🎬 Check out this video: ${videoData?.title}\n\nDownload it free on MediaPro 👇\n${url}`;
     if (platform === "whatsapp") shareOnWhatsApp(text);
@@ -493,7 +505,7 @@ export default function Home() {
     }
   };
 
-  // ── Audio Tab Helpers ─────────────────────────────────────────────────────────
+  // ── Audio helpers ──────────────────────────────────────────────────────────────
   const fetchAudioInfo = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
     if (!reelUrl.trim()) return;
@@ -515,6 +527,7 @@ export default function Home() {
     setTrimStart(0);
     setTrimEnd(30);
     setAudioShareMenuOpen(false);
+
     try {
       const response = await fetch(`${API_BASE}/api/audio/info`, {
         method: "POST",
@@ -549,9 +562,12 @@ export default function Home() {
     setIsAudioDownloading(true);
     setAudioDownloadProgress(0);
 
+    // Sanitize format_id before adding to query string
+    const cleanFormatId = sanitizeFormatId(selectedAudioFormat?.format_id);
+
     const params = new URLSearchParams({
       url: reelUrl,
-      format_id: selectedAudioFormat?.format_id || "bestaudio",
+      format_id: cleanFormatId,
       title: reelData.title || "audio",
     });
     if (trimEnabled && trimEnd > trimStart) {
@@ -646,7 +662,7 @@ export default function Home() {
 
     const params = new URLSearchParams({
       url: song.url,
-      format_id: "bestaudio",
+      format_id: "auto", // always use auto for song search — no specific format_id available
       title: song.title || "song",
     });
 
@@ -727,7 +743,7 @@ export default function Home() {
     setFeedbackMessage("");
   };
 
-  // ─── Share Dropdown Component ─────────────────────────────────────────────────
+  // ─── Share Dropdown ───────────────────────────────────────────────────────────
   const ShareDropdown = ({ onShare, hasNativeShare, isOpen, menuRef }) => (
     <div ref={menuRef} className="relative">
       {isOpen && (
@@ -827,7 +843,7 @@ export default function Home() {
       suppressHydrationWarning
       className="min-h-screen bg-[#0f0f0f] text-[#f1f1f1] font-sans flex flex-col selection:bg-[#9333ea] selection:text-white relative"
     >
-      {/* ─── HEADER ──────────────────────────────────────────────────────────── */}
+      {/* HEADER */}
       <header className="sticky top-0 z-40 w-full bg-[#0f0f0f]/95 backdrop-blur-md px-3 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between shadow-sm border-b border-[#272727]">
         <div className="flex items-center cursor-pointer">
           <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center mr-2 sm:mr-2.5 flex-shrink-0">
@@ -905,7 +921,7 @@ export default function Home() {
         </div>
       </header>
 
-      {/* ─── MAIN CONTENT ────────────────────────────────────────────────────── */}
+      {/* MAIN */}
       <main className="flex-grow flex flex-col items-center p-3 sm:p-6 mt-3 sm:mt-12">
         <div className="w-full max-w-3xl space-y-5 sm:space-y-8">
           {/* Hero */}
@@ -919,7 +935,7 @@ export default function Home() {
             </p>
           </div>
 
-          {/* ── TAB SWITCHER ─────────────────────────────────────────────────── */}
+          {/* Tab Switcher */}
           <div className="flex gap-1 p-1 bg-[#181818] border border-[#272727] rounded-2xl w-fit mx-auto">
             <button
               onClick={() => setActiveTab("video")}
@@ -964,9 +980,7 @@ export default function Home() {
             </button>
           </div>
 
-          {/* ══════════════════════════════════════════════════════════════════ */}
-          {/* VIDEO TAB                                                          */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* ══ VIDEO TAB ══ */}
           {activeTab === "video" && (
             <div className="space-y-4 sm:space-y-6">
               <div className="space-y-2 sm:space-y-3">
@@ -1395,9 +1409,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* ══════════════════════════════════════════════════════════════════ */}
-          {/* AUDIO TAB                                                          */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* ══ AUDIO TAB ══ */}
           {activeTab === "audio" && (
             <div className="space-y-4 sm:space-y-6">
               <div className="flex gap-1 p-1 bg-[#181818] border border-[#272727] rounded-xl w-full">
@@ -1441,7 +1453,7 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* ── REEL AUDIO EXTRACTION ────────────────────────────────────── */}
+              {/* REEL AUDIO EXTRACTION */}
               {audioTab === "reel" && (
                 <div className="space-y-4 sm:space-y-5">
                   <form
@@ -1997,7 +2009,7 @@ export default function Home() {
                 </div>
               )}
 
-              {/* ── SONG SEARCH ─────────────────────────────────────────────── */}
+              {/* SONG SEARCH */}
               {audioTab === "search" && (
                 <div className="space-y-4 sm:space-y-5">
                   <form
@@ -2346,7 +2358,7 @@ export default function Home() {
         </div>
       </main>
 
-      {/* ─── FOOTER ──────────────────────────────────────────────────────────── */}
+      {/* FOOTER */}
       <footer className="w-full bg-[#0f0f0f] border-t border-[#272727] py-4 sm:py-8 mt-auto">
         <div className="max-w-4xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-4 text-[10px] sm:text-xs text-[#717171]">
           <p>© {new Date().getFullYear()} Media Pro. All rights reserved.</p>
@@ -2361,7 +2373,7 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* ─── DOWNLOAD HISTORY MODAL ──────────────────────────────────────────── */}
+      {/* DOWNLOAD HISTORY MODAL */}
       {showHistory && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
           <div
@@ -2529,7 +2541,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* ─── PROFILE MODAL ───────────────────────────────────────────────────── */}
+      {/* PROFILE MODAL */}
       {isProfileOpen && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
           <div
@@ -2642,7 +2654,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* ─── FEEDBACK MODAL ──────────────────────────────────────────────────── */}
+      {/* FEEDBACK MODAL */}
       {isFeedbackOpen && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
           <div

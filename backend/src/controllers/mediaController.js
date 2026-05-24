@@ -102,6 +102,19 @@ const PLATFORM_OPTIONS = {
 const getPlatformOptions = (platform) =>
   PLATFORM_OPTIONS[platform] ?? PLATFORM_OPTIONS.generic;
 
+// ─── Format ID Sanitizer ──────────────────────────────────────────────────────
+// CRITICAL: format_id must be a plain numeric/alphanumeric ID from yt-dlp.
+// If it contains slashes or looks like a format selector string, ignore it
+// and fall back to platform defaults. This was the primary bug causing 500s.
+const isSafeFormatId = (id) => {
+  if (!id) return false;
+  if (id === "best" || id === "undefined" || id === "bestaudio") return false;
+  // A real yt-dlp format_id is numeric or short alphanumeric (e.g. "137", "18", "ba")
+  // It will NOT contain "/" or "+" or "[" — those are selector syntax, not IDs
+  if (/[/+[\]()]/.test(id)) return false;
+  return true;
+};
+
 // ─── Resolution Bucketing ─────────────────────────────────────────────────────
 const bucketResolution = (width, height) => {
   const short = Math.min(width || 0, height || 0);
@@ -134,6 +147,7 @@ const estimateSize = (f, durationSec) => {
   return { sizeString: "", sizeValueForSort: 0 };
 };
 
+// ─── Friendly Error Messages ──────────────────────────────────────────────────
 const friendlyError = (rawMessage = "") => {
   const m = rawMessage.toLowerCase();
   if (
@@ -143,18 +157,25 @@ const friendlyError = (rawMessage = "") => {
     m.includes("confirm you're not a bot")
   )
     return "This content is private or requires login. Only public links are supported.";
-  if (m.includes("not found") || m.includes("404")) return "Content not found.";
+  if (m.includes("not found") || m.includes("404"))
+    return "Content not found. Please check the URL.";
   if (m.includes("rate") || m.includes("429"))
     return "Too many requests. Please wait a moment and try again.";
   if (m.includes("unavailable"))
     return "This video is unavailable in your region or has been removed.";
   if (m.includes("unsupported url"))
     return "This URL is not supported. Please check the link.";
-  if (m.includes("no video formats"))
+  if (
+    m.includes("no video formats") ||
+    m.includes("requested format not available")
+  )
     return "No downloadable formats found. The content may be restricted.";
+  if (m.includes("unable to extract") || m.includes("extraction failed"))
+    return "Could not extract media. The content may have been removed or is restricted.";
   return "Could not fetch media. Ensure the link is public and properly formatted.";
 };
 
+// ─── Retry Helper ─────────────────────────────────────────────────────────────
 const withRetry = async (fn, maxAttempts = 2, delay = 1500) => {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -173,27 +194,66 @@ const withRetry = async (fn, maxAttempts = 2, delay = 1500) => {
   throw lastError;
 };
 
-// ─── TEMP FILE FINDER ─────────────────────────────────────────────────────────
+// ─── Temp File Finder ─────────────────────────────────────────────────────────
+// Scans the temp directory for any file whose basename starts with our prefix.
+// Handles yt-dlp's .%(ext)s output pattern which produces unpredictable extensions.
 const findTempFile = (basePath) => {
   if (fs.existsSync(basePath)) return basePath;
+
   const dir = path.dirname(basePath);
   const base = path.basename(basePath, path.extname(basePath));
+
   try {
-    const files = fs.readdirSync(dir).filter((f) => f.startsWith(base));
-    const finalFile = files.find(
+    const allFiles = fs.readdirSync(dir);
+
+    // Priority 1: exact complete files (no partial/temp suffixes)
+    const finalFiles = allFiles.filter(
       (f) =>
+        f.startsWith(base) &&
         !f.endsWith(".part") &&
         !f.endsWith(".ytdl") &&
-        !/\.f\d+\./.test(f) &&
-        !f.endsWith(".temp"),
+        !f.endsWith(".temp") &&
+        !/\.f\d+\./.test(f),
     );
-    if (finalFile) return path.join(dir, finalFile);
-    if (files.length > 0) return path.join(dir, files[0]);
-  } catch (_) {}
+
+    if (finalFiles.length > 0) {
+      // Prefer known audio/video extensions
+      const preferred = finalFiles.find((f) =>
+        /\.(mp4|mp3|m4a|webm|mkv|aac|opus|ogg)$/i.test(f),
+      );
+      return path.join(dir, preferred || finalFiles[0]);
+    }
+
+    // Priority 2: any file starting with our base (may still be downloading)
+    const anyMatch = allFiles.find((f) => f.startsWith(base));
+    if (anyMatch) return path.join(dir, anyMatch);
+  } catch (e) {
+    console.error("findTempFile error:", e.message);
+  }
+
   return null;
 };
 
-// ─── getMediaInfo ─────────────────────────────────────────────────────────────
+// ─── Cleanup Helper ──────────────────────────────────────────────────────────
+const cleanupFiles = (...basePaths) => {
+  for (const basePath of basePaths) {
+    try {
+      const dir = path.dirname(basePath);
+      const base = path.basename(basePath, path.extname(basePath));
+      fs.readdirSync(dir)
+        .filter((f) => f.startsWith(base))
+        .forEach((f) => {
+          try {
+            fs.unlinkSync(path.join(dir, f));
+          } catch (_) {}
+        });
+    } catch (_) {}
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// getMediaInfo
+// ═══════════════════════════════════════════════════════════════════════════════
 const getMediaInfo = async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -312,7 +372,9 @@ const getMediaInfo = async (req, res) => {
   }
 };
 
-// ─── downloadMedia ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// downloadMedia
+// ═══════════════════════════════════════════════════════════════════════════════
 const downloadMedia = async (req, res) => {
   const { url, format_id, title } = req.query;
   if (!url) return res.status(400).send("Missing URL");
@@ -333,32 +395,19 @@ const downloadMedia = async (req, res) => {
   console.log(`📡 Platform: ${platform} | URL: ${targetUrl}`);
 
   const options = getPlatformOptions(platform);
+  const safeId = isSafeFormatId(format_id) ? format_id : null;
 
   let formatStr;
   if (platform === "youtube") {
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/best[ext=mp4]/best`;
-    } else {
-      formatStr =
-        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
-    }
-  } else if (platform === "instagram") {
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}/best[ext=mp4]/best`;
-    } else {
-      formatStr = "best[ext=mp4]/best";
-    }
-  } else if (platform === "facebook") {
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}/best[ext=mp4]/best`;
-    } else {
-      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
-    }
+    formatStr = safeId
+      ? `${safeId}+bestaudio[ext=m4a]/${safeId}+bestaudio/best[ext=mp4]/best`
+      : "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
+  } else if (platform === "instagram" || platform === "facebook") {
+    formatStr = safeId ? `${safeId}/best[ext=mp4]/best` : "best[ext=mp4]/best";
   } else {
-    formatStr =
-      format_id && format_id !== "best" && format_id !== "undefined"
-        ? `${format_id}+bestaudio/${format_id}/best`
-        : "bestvideo+bestaudio/best";
+    formatStr = safeId
+      ? `${safeId}+bestaudio/${safeId}/best`
+      : "bestvideo+bestaudio/best";
   }
 
   console.log(`🎯 Format string: ${formatStr}`);
@@ -366,38 +415,26 @@ const downloadMedia = async (req, res) => {
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
 
-  const cleanup = () => {
-    try {
-      const dir = path.dirname(tempFilePath);
-      const base = path.basename(tempFilePath, path.extname(tempFilePath));
-      fs.readdirSync(dir)
-        .filter((f) => f.startsWith(base))
-        .forEach((f) => {
-          try {
-            fs.unlinkSync(path.join(dir, f));
-          } catch (_) {}
-        });
-    } catch (_) {}
-  };
-
   try {
-    const ytdlpOptions = {
-      ...options,
-      format: formatStr,
-      output: tempFilePath,
-      mergeOutputFormat: "mp4",
-      postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
-    };
-
-    console.log("⏳ Running yt-dlp download...");
-    await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
+    await withRetry(
+      () =>
+        youtubedl(targetUrl, {
+          ...options,
+          format: formatStr,
+          output: tempFilePath,
+          mergeOutputFormat: "mp4",
+          postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
+        }),
+      2,
+      2000,
+    );
 
     const actualFile = findTempFile(tempFilePath);
     if (!actualFile) throw new Error("Output file was not created by yt-dlp.");
 
     const stat = fs.statSync(actualFile);
     if (stat.size === 0) {
-      cleanup();
+      cleanupFiles(tempBase.replace(".mp4", ""));
       throw new Error("Downloaded file is empty. Video may be unavailable.");
     }
 
@@ -419,18 +456,23 @@ const downloadMedia = async (req, res) => {
 
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
-    stream.on("error", () => cleanup());
-    res.on("finish", () => cleanup());
-    res.on("close", () => cleanup());
+    stream.on("error", (e) => {
+      console.error("Stream error:", e.message);
+      cleanupFiles(tempBase);
+    });
+    res.on("finish", () => cleanupFiles(tempBase));
+    res.on("close", () => cleanupFiles(tempBase));
   } catch (error) {
     const msg = (error.stderr || error.message || "").toString();
     console.error("❌ [DOWNLOAD ERROR]:", msg.slice(0, 500));
-    cleanup();
+    cleanupFiles(tempBase);
     if (!res.headersSent) res.status(500).send(friendlyError(msg));
   }
 };
 
-// ─── getAudioInfo ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// getAudioInfo
+// ═══════════════════════════════════════════════════════════════════════════════
 const getAudioInfo = async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -463,6 +505,7 @@ const getAudioInfo = async (req, res) => {
     const durationSec = output.duration || 0;
     const formats = Array.isArray(output.formats) ? output.formats : [];
 
+    // ── Collect pure-audio streams ──────────────────────────────────────────
     let audioFormats = formats
       .filter((f) => {
         const hasAudio = f.acodec && f.acodec !== "none";
@@ -475,8 +518,7 @@ const getAudioInfo = async (req, res) => {
         if (f.filesize) sizeString = toMB(f.filesize);
         else if (f.filesize_approx) sizeString = `~${toMB(f.filesize_approx)}`;
         else if (f.tbr && durationSec) {
-          const est = (f.tbr * 1000 * durationSec) / 8;
-          sizeString = `~${toMB(est)}`;
+          sizeString = `~${toMB((f.tbr * 1000 * durationSec) / 8)}`;
         }
         return {
           format_id: f.format_id,
@@ -493,6 +535,7 @@ const getAudioInfo = async (req, res) => {
       })
       .sort((a, b) => (b.abr || 0) - (a.abr || 0));
 
+    // ── Fallback: use best combined-stream format (Instagram/Facebook) ───────
     if (audioFormats.length === 0) {
       const combinedWithAudio = formats
         .filter((f) => f.acodec && f.acodec !== "none")
@@ -522,9 +565,13 @@ const getAudioInfo = async (req, res) => {
       }
     }
 
+    // ── Final fallback: no formats found at all ───────────────────────────────
+    // NOTE: We do NOT fall back to the literal string "bestaudio/best" as a
+    // format_id — that causes 500s at download time. Instead we use a sentinel
+    // that the download handler recognises and replaces with a safe selector.
     if (audioFormats.length === 0) {
       audioFormats.push({
-        format_id: "bestaudio/best",
+        format_id: "auto", // <── sentinel, handled in downloadAudio
         ext: "m4a",
         abr: 0,
         quality: "Best Available",
@@ -532,6 +579,7 @@ const getAudioInfo = async (req, res) => {
       });
     }
 
+    // ── Deduplicate by bitrate bucket ────────────────────────────────────────
     const seen = new Set();
     const uniqueAudio = audioFormats.filter((f) => {
       const bucket = Math.round((f.abr || 0) / 32) * 32;
@@ -555,7 +603,9 @@ const getAudioInfo = async (req, res) => {
   }
 };
 
-// ─── downloadAudio ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// downloadAudio
+// ═══════════════════════════════════════════════════════════════════════════════
 const downloadAudio = async (req, res) => {
   const { url, format_id, title, startTime, endTime } = req.query;
 
@@ -579,68 +629,55 @@ const downloadAudio = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
+  // ── Build format string safely ──────────────────────────────────────────────
+  // isSafeFormatId guards against slash-containing selector strings being
+  // passed as format_id (the root cause of the reported 500 errors).
+  const safeId = isSafeFormatId(format_id) ? format_id : null;
+
   let formatStr;
   if (platform === "instagram" || platform === "facebook") {
-    if (
-      format_id &&
-      format_id !== "bestaudio" &&
-      format_id !== "undefined" &&
-      format_id !== "best"
-    ) {
-      formatStr = `${format_id}/bestaudio/best`;
-    } else {
-      formatStr = "bestaudio/best[ext=mp4]/best";
-    }
+    // These platforms rarely expose standalone audio streams; download the best
+    // combined stream and let ffmpeg extract the audio track.
+    formatStr = safeId ? `${safeId}/best[ext=mp4]/best` : "best[ext=mp4]/best";
   } else {
-    if (
-      format_id &&
-      format_id !== "bestaudio" &&
-      format_id !== "undefined" &&
-      format_id !== "best"
-    ) {
-      formatStr = `${format_id}/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best`;
-    } else {
-      formatStr = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best";
-    }
+    // YouTube / generic: prefer standalone audio streams
+    formatStr = safeId
+      ? `${safeId}/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best`
+      : "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best";
   }
 
   console.log(`🎯 Audio format string: ${formatStr}`);
 
   const tempBase = `aud_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const tempRawPath = path.join(os.tmpdir(), `${tempBase}_raw`);
+  const tempRawBase = path.join(os.tmpdir(), `${tempBase}_raw`);
   const tempMp3Path = path.join(os.tmpdir(), `${tempBase}.mp3`);
 
   const cleanup = () => {
-    try {
-      const dir = path.dirname(tempRawPath);
-      const base = path.basename(tempRawPath);
-      fs.readdirSync(dir)
-        .filter((f) => f.startsWith(base) || f === path.basename(tempMp3Path))
-        .forEach((f) => {
-          try {
-            fs.unlinkSync(path.join(dir, f));
-          } catch (_) {}
-        });
-    } catch (_) {}
+    cleanupFiles(tempRawBase);
     try {
       if (fs.existsSync(tempMp3Path)) fs.unlinkSync(tempMp3Path);
     } catch (_) {}
   };
 
   try {
-    const ytdlpOptions = {
-      ...options,
-      format: formatStr,
-      output: `${tempRawPath}.%(ext)s`,
-    };
+    // ── Step 1: Download raw audio ─────────────────────────────────────────
+    await withRetry(
+      () =>
+        youtubedl(targetUrl, {
+          ...options,
+          format: formatStr,
+          output: `${tempRawBase}.%(ext)s`, // yt-dlp fills in the extension
+        }),
+      2,
+      2000,
+    );
 
-    console.log("⏳ Downloading audio with yt-dlp...");
-    await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
-
-    let actualRawFile = findTempFile(tempRawPath);
+    // ── Step 2: Find the downloaded file ──────────────────────────────────
+    let actualRawFile = findTempFile(tempRawBase);
     if (!actualRawFile) {
+      // Last-resort scan of the whole tmp dir
       const dir = os.tmpdir();
-      const base = path.basename(tempRawPath);
+      const base = path.basename(tempRawBase);
       const found = fs
         .readdirSync(dir)
         .find(
@@ -658,18 +695,18 @@ const downloadAudio = async (req, res) => {
     }
 
     console.log(
-      `✅ Raw audio: ${(rawStat.size / 1_048_576).toFixed(2)} MB at ${actualRawFile}`,
+      `✅ Raw audio: ${(rawStat.size / 1_048_576).toFixed(2)} MB → ${actualRawFile}`,
     );
 
-    // ── ffmpeg: convert to MP3, optionally trim ───────────────────────────────
-    const ffmpegArgs = ["-y", "-loglevel", "error", "-i", actualRawFile];
-
+    // ── Step 3: Convert to MP3 with optional trim ─────────────────────────
     const start = parseFloat(startTime);
     const end = parseFloat(endTime);
     const hasTrim = !isNaN(start) && !isNaN(end) && end > start;
 
+    const ffmpegArgs = ["-y", "-loglevel", "error", "-i", actualRawFile];
+
     if (hasTrim) {
-      console.log(`✂️  Trimming audio: ${start}s → ${end}s`);
+      console.log(`✂️  Trimming: ${start}s → ${end}s`);
       ffmpegArgs.push("-ss", String(start), "-to", String(end));
     }
 
@@ -687,8 +724,7 @@ const downloadAudio = async (req, res) => {
     await new Promise((resolve, reject) => {
       execFile(ffmpegBin, ffmpegArgs, (err, _stdout, stderr) => {
         if (err) {
-          console.error("❌ FFmpeg full error:", err);
-          console.error("❌ FFmpeg stderr:", stderr);
+          console.error("❌ FFmpeg error:", stderr || err.message);
           reject(
             new Error("Audio conversion failed: " + (stderr || err.message)),
           );
@@ -698,13 +734,15 @@ const downloadAudio = async (req, res) => {
       });
     });
 
-    if (!fs.existsSync(tempMp3Path)) throw new Error("MP3 conversion failed.");
+    if (!fs.existsSync(tempMp3Path))
+      throw new Error("MP3 conversion produced no output file.");
 
     const mp3Stat = fs.statSync(tempMp3Path);
     if (mp3Stat.size === 0) throw new Error("Converted MP3 is empty.");
 
     console.log(`✅ MP3 ready: ${(mp3Stat.size / 1_048_576).toFixed(2)} MB`);
 
+    // ── Step 4: Stream to client ───────────────────────────────────────────
     const downloadName = hasTrim
       ? `${safeTitle}_ringtone.mp3`
       : `${safeTitle}.mp3`;
@@ -718,9 +756,12 @@ const downloadAudio = async (req, res) => {
 
     const stream = fs.createReadStream(tempMp3Path);
     stream.pipe(res);
-    stream.on("error", () => cleanup());
-    res.on("finish", () => cleanup());
-    res.on("close", () => cleanup());
+    stream.on("error", (e) => {
+      console.error("Stream error:", e.message);
+      cleanup();
+    });
+    res.on("finish", cleanup);
+    res.on("close", cleanup);
   } catch (error) {
     const msg = (error.stderr || error.message || "").toString();
     console.error("❌ [AUDIO DOWNLOAD ERROR]:", msg.slice(0, 500));
@@ -729,7 +770,9 @@ const downloadAudio = async (req, res) => {
   }
 };
 
-// ─── searchSong ───────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// searchSong
+// ═══════════════════════════════════════════════════════════════════════════════
 const searchSong = async (req, res) => {
   const { query } = req.query;
   if (!query || !query.trim())
@@ -737,7 +780,6 @@ const searchSong = async (req, res) => {
 
   try {
     console.log(`🔍 [SONG SEARCH] Query: "${query}"`);
-
     const searchUrl = `ytsearch8:${query.trim()}`;
 
     let output;
@@ -769,7 +811,6 @@ const searchSong = async (req, res) => {
     }
 
     if (entries.length === 0) {
-      console.log("⚠️ No entries found in search output");
       return res.json({ results: [] });
     }
 
@@ -791,9 +832,8 @@ const searchSong = async (req, res) => {
           thumbnail = sorted[0]?.url || null;
         }
         const videoId = e.id || e.url?.match(/[?&]v=([^&]+)/)?.[1] || null;
-        if (!thumbnail && videoId) {
+        if (!thumbnail && videoId)
           thumbnail = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
-        }
 
         const pageUrl =
           e.webpage_url ||
@@ -817,9 +857,9 @@ const searchSong = async (req, res) => {
   } catch (error) {
     const msg = (error.stderr || error.message || "").toString();
     console.error("❌ [SEARCH ERROR]:", msg.slice(0, 500));
-    return res.status(500).json({
-      error: "Song search failed. Please try again.",
-    });
+    return res
+      .status(500)
+      .json({ error: "Song search failed. Please try again." });
   }
 };
 
