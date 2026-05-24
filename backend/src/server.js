@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const mediaRoutes = require("./routes/mediaRoutes"); // Import the routes
+const mediaRoutes = require("./routes/mediaRoutes");
 
 const app = express();
 
@@ -19,7 +19,6 @@ app.use("/api", mediaRoutes);
 app.get("/", (req, res) => {
   res.send("API Server is running perfectly.");
 });
-
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
