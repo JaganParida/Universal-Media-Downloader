@@ -29,34 +29,47 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
+// Apply CORS middleware first — this handles preflight (OPTIONS) automatically
 app.use(cors(corsOptions));
 
-// ✅ FIXED: was "/(.*)" which breaks on Node.js v24 / new path-to-regexp
-app.options("/*", cors(corsOptions));
-
+// Additional headers to fix NotSameOrigin / cross-origin blocking
 app.use((req, res, next) => {
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
   res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
   const origin = req.headers.origin;
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  } else {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  }
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    origin && !allowedOrigins.includes("*") ? origin : "*",
+  );
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader(
     "Access-Control-Expose-Headers",
     "Content-Length, Content-Disposition, Content-Type",
   );
+  // Handle preflight requests inline — no app.options() needed
+  if (req.method === "OPTIONS") {
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, OPTIONS",
+    );
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Requested-With, Accept, Origin",
+    );
+    return res.sendStatus(200);
+  }
   next();
 });
 
+// Body parsing
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
+// Routes
 app.use("/api", mediaRoutes);
 
+// Health check
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -72,10 +85,12 @@ app.get("/", (req, res) => {
   });
 });
 
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.path} not found` });
 });
 
+// Global error handler
 app.use((err, req, res, next) => {
   console.error("💥 Unhandled error:", err.message);
   if (!res.headersSent) {
