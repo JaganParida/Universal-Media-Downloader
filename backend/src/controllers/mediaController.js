@@ -1,3 +1,4 @@
+// mediaController.js
 const youtubedl = require("youtube-dl-exec");
 const path = require("path");
 const ffmpegBin = require("ffmpeg-static");
@@ -342,8 +343,6 @@ const downloadMedia = async (req, res) => {
         "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
     }
   } else if (platform === "instagram") {
-    // Instagram: always grab best combined stream — separate video+audio merging
-    // often fails on Reels. "best" or "bestvideo" approach is most reliable.
     if (format_id && format_id !== "best" && format_id !== "undefined") {
       formatStr = `${format_id}/best[ext=mp4]/best`;
     } else {
@@ -387,7 +386,7 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart", // <--- Safe here, because output is MP4 container
+      postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
     };
 
     console.log("⏳ Running yt-dlp download...");
@@ -464,7 +463,6 @@ const getAudioInfo = async (req, res) => {
     const durationSec = output.duration || 0;
     const formats = Array.isArray(output.formats) ? output.formats : [];
 
-    // ── Step 1: pure audio-only streams ──────────────────────────────────────
     let audioFormats = formats
       .filter((f) => {
         const hasAudio = f.acodec && f.acodec !== "none";
@@ -495,12 +493,7 @@ const getAudioInfo = async (req, res) => {
       })
       .sort((a, b) => (b.abr || 0) - (a.abr || 0));
 
-    // ── Step 2: fallback — extract audio track from best combined stream ──────
-    // This is the KEY fix: Instagram/Facebook Reels almost never have
-    // separate audio-only streams; we must use the combined video+audio stream
-    // and let ffmpeg strip the audio on download.
     if (audioFormats.length === 0) {
-      // Sort combined formats by quality, pick the best one that has audio
       const combinedWithAudio = formats
         .filter((f) => f.acodec && f.acodec !== "none")
         .sort((a, b) => {
@@ -518,18 +511,17 @@ const getAudioInfo = async (req, res) => {
           sizeString = `~${toMB(best.filesize_approx)}`;
 
         audioFormats.push({
-          format_id: best.format_id, // use the real format_id, not "bestaudio"
+          format_id: best.format_id,
           ext: best.ext || "mp4",
           abr: best.abr || best.tbr || 128,
           acodec: best.acodec || "aac",
           filesize: sizeString,
           quality: "Best Available",
-          isFromCombined: true, // flag so download handler knows
+          isFromCombined: true,
         });
       }
     }
 
-    // ── Step 3: absolute fallback ─────────────────────────────────────────────
     if (audioFormats.length === 0) {
       audioFormats.push({
         format_id: "bestaudio/best",
@@ -540,7 +532,6 @@ const getAudioInfo = async (req, res) => {
       });
     }
 
-    // ── Deduplicate by quality bucket ─────────────────────────────────────────
     const seen = new Set();
     const uniqueAudio = audioFormats.filter((f) => {
       const bucket = Math.round((f.abr || 0) / 32) * 32;
@@ -588,10 +579,8 @@ const downloadAudio = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // ── Build format string ───────────────────────────────────────────────────
   let formatStr;
   if (platform === "instagram" || platform === "facebook") {
-    // Use the real format_id if provided, otherwise fall back gracefully
     if (
       format_id &&
       format_id !== "bestaudio" &&
@@ -603,7 +592,6 @@ const downloadAudio = async (req, res) => {
       formatStr = "bestaudio/best[ext=mp4]/best";
     }
   } else {
-    // YouTube and others: prefer pure audio streams
     if (
       format_id &&
       format_id !== "bestaudio" &&
@@ -623,7 +611,6 @@ const downloadAudio = async (req, res) => {
   const tempMp3Path = path.join(os.tmpdir(), `${tempBase}.mp3`);
 
   const cleanup = () => {
-    // Remove all temp files that start with this base
     try {
       const dir = path.dirname(tempRawPath);
       const base = path.basename(tempRawPath);
@@ -650,7 +637,6 @@ const downloadAudio = async (req, res) => {
     console.log("⏳ Downloading audio with yt-dlp...");
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
 
-    // FIXED: Cleaned up redundant fallback logic here
     let actualRawFile = findTempFile(tempRawPath);
     if (!actualRawFile) {
       const dir = os.tmpdir();
@@ -676,7 +662,7 @@ const downloadAudio = async (req, res) => {
     );
 
     // ── ffmpeg: convert to MP3, optionally trim ───────────────────────────────
-    const ffmpegArgs = ["-i", actualRawFile, "-y"];
+    const ffmpegArgs = ["-y", "-loglevel", "error", "-i", actualRawFile];
 
     const start = parseFloat(startTime);
     const end = parseFloat(endTime);
@@ -687,7 +673,6 @@ const downloadAudio = async (req, res) => {
       ffmpegArgs.push("-ss", String(start), "-to", String(end));
     }
 
-    // FIXED: REMOVED "-movflags" and "+faststart" from here since MP3s don't support moov atoms!
     ffmpegArgs.push(
       "-vn", // strip video track
       "-acodec",
@@ -702,12 +687,10 @@ const downloadAudio = async (req, res) => {
     await new Promise((resolve, reject) => {
       execFile(ffmpegBin, ffmpegArgs, (err, _stdout, stderr) => {
         if (err) {
-          console.error("❌ FFmpeg error:", stderr?.slice(0, 300));
+          console.error("❌ FFmpeg full error:", err);
+          console.error("❌ FFmpeg stderr:", stderr);
           reject(
-            new Error(
-              "Audio conversion failed: " +
-                (stderr?.slice(0, 200) || err.message),
-            ),
+            new Error("Audio conversion failed: " + (stderr || err.message)),
           );
         } else {
           resolve();
@@ -742,7 +725,7 @@ const downloadAudio = async (req, res) => {
     const msg = (error.stderr || error.message || "").toString();
     console.error("❌ [AUDIO DOWNLOAD ERROR]:", msg.slice(0, 500));
     cleanup();
-    if (!res.headersSent) res.status(500).send(msg);
+    if (!res.headersSent) res.status(500).send(friendlyError(msg));
   }
 };
 
