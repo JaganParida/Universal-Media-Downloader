@@ -21,14 +21,37 @@ const formatViews = (n) => {
   return `${n} views`;
 };
 
+// ─── Proxy thumbnail URL through our backend to avoid CORS/COEP blocks ────────
+// Instagram CDN images are blocked by ERR_BLOCKED_BY_RESPONSE.NotSameOrigin
+// when loaded directly. Routing through our proxy fixes this.
+const proxyThumbnail = (url) => {
+  if (!url) return null;
+  // YouTube thumbnails (i.ytimg.com) don't need proxying
+  if (url.includes("i.ytimg.com") || url.includes("img.youtube.com"))
+    return url;
+  // Instagram and Facebook CDN images need the proxy
+  if (
+    url.includes("cdninstagram.com") ||
+    url.includes("fbcdn.net") ||
+    url.includes("fbsbx.com") ||
+    url.includes("instagram.com")
+  ) {
+    return `${API_BASE}/api/thumbnail?url=${encodeURIComponent(url)}`;
+  }
+  return url;
+};
+
 // ─── WhatsApp Share Helper ────────────────────────────────────────────────────
 const shareOnWhatsApp = (text) => {
   const encoded = encodeURIComponent(text);
-  const waUrl = `https://wa.me/?text=${encoded}`;
-  window.open(waUrl, "_blank", "noopener,noreferrer");
+  window.open(
+    `https://wa.me/?text=${encoded}`,
+    "_blank",
+    "noopener,noreferrer",
+  );
 };
 
-// ─── Copy to Clipboard Helper ─────────────────────────────────────────────────
+// ─── Copy to Clipboard ────────────────────────────────────────────────────────
 const copyToClipboard = async (text) => {
   try {
     await navigator.clipboard.writeText(text);
@@ -93,11 +116,11 @@ export default function Home() {
   const [downloadedIds, setDownloadedIds] = useState(new Set());
   const [songDownloadProgress, setSongDownloadProgress] = useState({});
 
-  // ── Download History (Creative Feature) ─────────────────────────────────────
+  // ── Download History ─────────────────────────────────────────────────────────
   const [downloadHistory, setDownloadHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
-  // ── Paste from Clipboard Feature ─────────────────────────────────────────────
+  // ── Paste from Clipboard ─────────────────────────────────────────────────────
   const [pasteLoading, setPasteLoading] = useState(false);
   const [reelPasteLoading, setReelPasteLoading] = useState(false);
 
@@ -201,13 +224,12 @@ export default function Home() {
   }, [trimDuration]);
 
   // ── Paste from Clipboard ──────────────────────────────────────────────────────
-  const handlePasteFromClipboard = async (setter, triggerFetch) => {
+  const handlePasteFromClipboard = async (setter) => {
     setPasteLoading(true);
     try {
       const text = await navigator.clipboard.readText();
       if (text && (text.startsWith("http://") || text.startsWith("https://"))) {
         setter(text);
-        if (triggerFetch) triggerFetch(text);
       }
     } catch (_) {
     } finally {
@@ -363,7 +385,6 @@ export default function Home() {
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
       setDownloadProgress(100);
-      // Add to history
       addToHistory({
         type: "video",
         title: videoData.title,
@@ -427,9 +448,8 @@ export default function Home() {
   // ── Share helpers ─────────────────────────────────────────────────────────────
   const handleShareVideo = async (platform) => {
     const text = `🎬 Check out this video: ${videoData?.title}\n\nDownload it free on MediaPro 👇\n${url}`;
-    if (platform === "whatsapp") {
-      shareOnWhatsApp(text);
-    } else if (platform === "copy") {
+    if (platform === "whatsapp") shareOnWhatsApp(text);
+    else if (platform === "copy") {
       const ok = await copyToClipboard(url);
       if (ok) {
         setCopySuccess(true);
@@ -445,9 +465,8 @@ export default function Home() {
 
   const handleShareAudio = async (platform) => {
     const text = `🎵 Listen to this: ${reelData?.title}\n\nExtract audio free on MediaPro 👇\n${reelUrl}`;
-    if (platform === "whatsapp") {
-      shareOnWhatsApp(text);
-    } else if (platform === "copy") {
+    if (platform === "whatsapp") shareOnWhatsApp(text);
+    else if (platform === "copy") {
       const ok = await copyToClipboard(reelUrl);
       if (ok) {
         setCopySuccess(true);
@@ -463,9 +482,8 @@ export default function Home() {
 
   const handleShareSong = async (song, platform) => {
     const text = `🎵 Download "${song.title}" for free on MediaPro!\n${song.url}`;
-    if (platform === "whatsapp") {
-      shareOnWhatsApp(text);
-    } else if (platform === "copy") {
+    if (platform === "whatsapp") shareOnWhatsApp(text);
+    else if (platform === "copy") {
       const ok = await copyToClipboard(song.url);
       if (ok) {
         setCopySuccess(true);
@@ -505,11 +523,6 @@ export default function Home() {
 
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) {
-        if (response.status === 404) {
-          throw new Error(
-            "Audio API route not found (404). Please redeploy your backend — the new /api/audio/info route is not live yet on Render.",
-          );
-        }
         throw new Error(
           `Server error (${response.status}). Please check your backend deployment.`,
         );
@@ -523,13 +536,7 @@ export default function Home() {
         setSelectedAudioFormat(data.audioFormats[0]);
       setReelFetchedUrl(reelUrl);
     } catch (err) {
-      if (err.message.includes("JSON")) {
-        setReelError(
-          "Backend not updated yet. Please push your new backend code to Render — the audio routes are missing on the live server.",
-        );
-      } else {
-        setReelError(err.message);
-      }
+      setReelError(err.message);
       setReelFetchedUrl("");
     } finally {
       setReelLoading(false);
@@ -614,11 +621,6 @@ export default function Home() {
       );
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) {
-        if (response.status === 404) {
-          throw new Error(
-            "Audio search route not found (404). Please redeploy your backend with the new audio routes.",
-          );
-        }
         throw new Error(
           `Server error (${response.status}). Please check your backend deployment.`,
         );
@@ -629,13 +631,7 @@ export default function Home() {
       if ((data.results || []).length === 0)
         setSongError("No results found. Try different keywords.");
     } catch (err) {
-      if (err.message.includes("JSON")) {
-        setSongError(
-          "Backend not updated yet. Please push your new backend code to Render.",
-        );
-      } else {
-        setSongError(err.message || "Song search failed.");
-      }
+      setSongError(err.message || "Song search failed.");
     } finally {
       setSongSearchLoading(false);
     }
@@ -739,7 +735,6 @@ export default function Home() {
               Share via
             </p>
           </div>
-          {/* WhatsApp */}
           <button
             onClick={() => onShare("whatsapp")}
             className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#303030] transition-colors text-left"
@@ -755,7 +750,6 @@ export default function Home() {
             </span>
             <span className="text-sm text-[#f1f1f1] font-medium">WhatsApp</span>
           </button>
-          {/* Copy Link */}
           <button
             onClick={() => onShare("copy")}
             className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#303030] transition-colors text-left"
@@ -795,7 +789,6 @@ export default function Home() {
               {copySuccess ? "Copied!" : "Copy Link"}
             </span>
           </button>
-          {/* Native Share (mobile) */}
           {hasNativeShare && (
             <button
               onClick={() => onShare("native")}
@@ -847,7 +840,6 @@ export default function Home() {
           </h1>
         </div>
         <div className="flex items-center gap-2 sm:gap-4">
-          {/* Download History Button */}
           <button
             onClick={() => setShowHistory(true)}
             className="relative flex items-center gap-1 sm:gap-1.5 text-sm font-medium text-[#aaaaaa] hover:text-[#f1f1f1] transition-colors p-1.5 sm:p-0"
@@ -929,11 +921,7 @@ export default function Home() {
           <div className="flex gap-1 p-1 bg-[#181818] border border-[#272727] rounded-2xl w-fit mx-auto">
             <button
               onClick={() => setActiveTab("video")}
-              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 ${
-                activeTab === "video"
-                  ? "bg-[#f1f1f1] text-[#0f0f0f] shadow-md"
-                  : "text-[#aaaaaa] hover:text-[#f1f1f1]"
-              }`}
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 ${activeTab === "video" ? "bg-[#f1f1f1] text-[#0f0f0f] shadow-md" : "text-[#aaaaaa] hover:text-[#f1f1f1]"}`}
             >
               <svg
                 className="w-3.5 h-3.5 sm:w-4 sm:h-4"
@@ -952,11 +940,7 @@ export default function Home() {
             </button>
             <button
               onClick={() => setActiveTab("audio")}
-              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 ${
-                activeTab === "audio"
-                  ? "bg-[#f1f1f1] text-[#0f0f0f] shadow-md"
-                  : "text-[#aaaaaa] hover:text-[#f1f1f1]"
-              }`}
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 ${activeTab === "audio" ? "bg-[#f1f1f1] text-[#0f0f0f] shadow-md" : "text-[#aaaaaa] hover:text-[#f1f1f1]"}`}
             >
               <svg
                 className="w-3.5 h-3.5 sm:w-4 sm:h-4"
@@ -983,7 +967,6 @@ export default function Home() {
           {/* ══════════════════════════════════════════════════════════════════ */}
           {activeTab === "video" && (
             <div className="space-y-4 sm:space-y-6">
-              {/* Input Area */}
               <div className="space-y-2 sm:space-y-3">
                 <form
                   onSubmit={fetchMetadata}
@@ -1012,7 +995,6 @@ export default function Home() {
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
                     />
-                    {/* Paste button inside input */}
                     <button
                       type="button"
                       onClick={() => handlePasteFromClipboard(setUrl)}
@@ -1041,8 +1023,7 @@ export default function Home() {
                   >
                     {isLoading ? (
                       <svg
-                        className="animate-spin h-4 w-4 sm:h-5 sm:w-5 text-[#f1f1f1]"
-                        xmlns="http://www.w3.org/2000/svg"
+                        className="animate-spin h-4 w-4 sm:h-5 sm:w-5"
                         fill="none"
                         viewBox="0 0 24 24"
                       >
@@ -1083,7 +1064,6 @@ export default function Home() {
                   </button>
                 </form>
 
-                {/* Warnings / Timer */}
                 <div className="px-2 sm:px-3 min-h-[40px] sm:min-h-[48px] flex items-start">
                   {isLoading ? (
                     <div className="text-xs text-[#aaaaaa] flex items-start gap-2 animate-in fade-in duration-300">
@@ -1169,7 +1149,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Error */}
               {error && (
                 <div className="p-3 sm:p-4 bg-[#ff0000]/10 border border-[#ff0000]/30 text-[#ff4e4e] rounded-xl flex items-start gap-2 sm:gap-3">
                   <svg
@@ -1187,16 +1166,16 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Video Data */}
               {videoData && (
                 <div className="bg-[#181818] border border-[#272727] rounded-2xl overflow-hidden shadow-2xl transition-all animate-in fade-in slide-in-from-bottom-4 duration-500">
                   <div className="relative aspect-video bg-black group overflow-hidden border-b border-[#272727]">
                     {videoData.thumbnail && !imgError ? (
                       <img
-                        src={videoData.thumbnail}
+                        src={proxyThumbnail(videoData.thumbnail)}
                         alt={videoData.title}
                         onError={() => setImgError(true)}
                         className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 absolute inset-0"
+                        crossOrigin="anonymous"
                       />
                     ) : (
                       <div className="flex flex-col items-center justify-center w-full h-full text-[#555555] bg-[#121212] absolute inset-0">
@@ -1223,7 +1202,6 @@ export default function Home() {
                         </svg>
                       </div>
                     </div>
-                    {/* Duration badge */}
                     {videoData.duration > 0 && (
                       <div className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 bg-black/70 text-white text-[10px] sm:text-xs font-bold px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md">
                         {formatDuration(videoData.duration)}
@@ -1320,7 +1298,6 @@ export default function Home() {
                           </div>
                         )}
                       </div>
-                      {/* Download + Share row */}
                       <div className="flex gap-2">
                         <button
                           onClick={handleDownload}
@@ -1349,7 +1326,7 @@ export default function Home() {
                                       strokeWidth="2"
                                       d="M5 13l4 4L19 7"
                                     ></path>
-                                  </svg>{" "}
+                                  </svg>
                                   Done!
                                 </>
                               ) : (
@@ -1369,13 +1346,12 @@ export default function Home() {
                                     strokeWidth="2"
                                     d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                                   ></path>
-                                </svg>{" "}
+                                </svg>
                                 Download
                               </>
                             )}
                           </span>
                         </button>
-                        {/* Share Button */}
                         <div className="relative" ref={shareMenuRef}>
                           <button
                             onClick={() => setShareMenuOpen(!shareMenuOpen)}
@@ -1422,7 +1398,6 @@ export default function Home() {
           {/* ══════════════════════════════════════════════════════════════════ */}
           {activeTab === "audio" && (
             <div className="space-y-4 sm:space-y-6">
-              {/* Audio Sub-tabs */}
               <div className="flex gap-1 p-1 bg-[#181818] border border-[#272727] rounded-xl w-full">
                 <button
                   onClick={() => setAudioTab("reel")}
@@ -1498,7 +1473,6 @@ export default function Home() {
                             setReelFetchedUrl("");
                         }}
                       />
-                      {/* Paste button */}
                       <button
                         type="button"
                         onClick={handleReelPasteFromClipboard}
@@ -1552,7 +1526,6 @@ export default function Home() {
                       {reelLoading ? (
                         <svg
                           className="animate-spin h-4 w-4 sm:h-5 sm:w-5"
-                          xmlns="http://www.w3.org/2000/svg"
                           fill="none"
                           viewBox="0 0 24 24"
                         >
@@ -1584,7 +1557,7 @@ export default function Home() {
                               strokeWidth="2"
                               d="M5 13l4 4L19 7"
                             ></path>
-                          </svg>{" "}
+                          </svg>
                           Ready
                         </>
                       ) : (
@@ -1653,10 +1626,11 @@ export default function Home() {
                       <div className="relative h-28 sm:h-44 bg-black overflow-hidden border-b border-[#272727]">
                         {reelData.thumbnail && !reelImgError ? (
                           <img
-                            src={reelData.thumbnail}
+                            src={proxyThumbnail(reelData.thumbnail)}
                             alt={reelData.title}
                             onError={() => setReelImgError(true)}
                             className="w-full h-full object-cover opacity-60"
+                            crossOrigin="anonymous"
                           />
                         ) : (
                           <div className="w-full h-full bg-[#121212]" />
@@ -1691,7 +1665,6 @@ export default function Home() {
                           {reelData.title}
                         </h2>
 
-                        {/* Quality Selector */}
                         <div ref={audioDropdownRef} className="relative">
                           <button
                             onClick={() =>
@@ -1819,7 +1792,6 @@ export default function Home() {
                               />
                             </div>
                           </button>
-
                           {trimEnabled && trimDuration > 0 && (
                             <div className="px-4 sm:px-5 pb-4 sm:pb-5 space-y-3 sm:space-y-4 border-t border-[#272727]">
                               <div className="flex items-center justify-between pt-3 sm:pt-4">
@@ -1922,7 +1894,6 @@ export default function Home() {
                           )}
                         </div>
 
-                        {/* Download + Share */}
                         <div className="flex gap-2">
                           <button
                             onClick={handleAudioDownload}
@@ -1954,7 +1925,7 @@ export default function Home() {
                                         strokeWidth="2"
                                         d="M5 13l4 4L19 7"
                                       ></path>
-                                    </svg>{" "}
+                                    </svg>
                                     Done!
                                   </>
                                 ) : (
@@ -1982,7 +1953,6 @@ export default function Home() {
                               )}
                             </span>
                           </button>
-                          {/* Audio Share */}
                           <div className="relative" ref={audioShareMenuRef}>
                             <button
                               onClick={() =>
@@ -2064,7 +2034,6 @@ export default function Home() {
                       {songSearchLoading ? (
                         <svg
                           className="animate-spin h-4 w-4 sm:h-5 sm:w-5"
-                          xmlns="http://www.w3.org/2000/svg"
                           fill="none"
                           viewBox="0 0 24 24"
                         >
@@ -2147,7 +2116,6 @@ export default function Home() {
                             key={song.id}
                             className="flex items-center gap-2 sm:gap-3 p-2.5 sm:p-4 bg-[#181818] border border-[#272727] hover:border-[#3a3a3a] rounded-xl transition-all group"
                           >
-                            {/* Thumbnail */}
                             <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-lg overflow-hidden bg-[#222222] flex-shrink-0 relative">
                               {song.thumbnail ? (
                                 <img
@@ -2176,7 +2144,6 @@ export default function Home() {
                                 </div>
                               )}
                             </div>
-                            {/* Info */}
                             <div className="flex-1 min-w-0">
                               <p className="text-xs sm:text-sm font-medium text-[#f1f1f1] line-clamp-1 leading-snug">
                                 {song.title}
@@ -2217,9 +2184,7 @@ export default function Home() {
                                 </div>
                               )}
                             </div>
-                            {/* Action buttons */}
                             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-                              {/* WhatsApp share for song */}
                               <button
                                 onClick={() =>
                                   handleShareSong(song, "whatsapp")
@@ -2235,17 +2200,10 @@ export default function Home() {
                                   <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
                                 </svg>
                               </button>
-                              {/* Download */}
                               <button
                                 onClick={() => handleSongDownload(song)}
                                 disabled={!!downloadingId || isDone}
-                                className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-full transition-all duration-200 ${
-                                  isDone
-                                    ? "bg-green-500/20 text-green-500 border border-green-500/30"
-                                    : isThisDownloading
-                                      ? "bg-[#a855f7]/20 text-[#a855f7] border border-[#a855f7]/30"
-                                      : "bg-[#222222] text-[#aaaaaa] border border-[#303030] hover:bg-[#a855f7] hover:text-white hover:border-[#a855f7] group-hover:border-[#a855f7]/50"
-                                } disabled:opacity-60 disabled:cursor-not-allowed`}
+                                className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-full transition-all duration-200 ${isDone ? "bg-green-500/20 text-green-500 border border-green-500/30" : isThisDownloading ? "bg-[#a855f7]/20 text-[#a855f7] border border-[#a855f7]/30" : "bg-[#222222] text-[#aaaaaa] border border-[#303030] hover:bg-[#a855f7] hover:text-white hover:border-[#a855f7] group-hover:border-[#a855f7]/50"} disabled:opacity-60 disabled:cursor-not-allowed`}
                                 title={
                                   isDone
                                     ? "Downloaded"
@@ -2342,7 +2300,7 @@ export default function Home() {
           )}
         </div>
 
-        {/* ─── PROFILE CARD ──────────────────────────────────────────────────── */}
+        {/* Profile Card */}
         <div className="w-full max-w-3xl mt-10 sm:mt-24 mb-4">
           <button
             onClick={() => setIsProfileOpen(true)}
@@ -2408,7 +2366,7 @@ export default function Home() {
             className="absolute inset-0"
             onClick={() => setShowHistory(false)}
           ></div>
-          <div className="relative w-full sm:max-w-lg bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl animate-in slide-in-from-bottom duration-300 sm:animate-in sm:zoom-in-95 max-h-[85vh] flex flex-col">
+          <div className="relative w-full sm:max-w-lg bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl animate-in slide-in-from-bottom duration-300 max-h-[85vh] flex flex-col">
             <div className="px-4 sm:px-6 py-4 border-b border-[#272727] flex items-center justify-between flex-shrink-0">
               <h3 className="text-base sm:text-lg font-bold text-[#f1f1f1] flex items-center gap-2">
                 <svg
@@ -2491,7 +2449,7 @@ export default function Home() {
                       <div className="w-10 h-10 rounded-lg overflow-hidden bg-[#222] flex-shrink-0">
                         {item.thumbnail ? (
                           <img
-                            src={item.thumbnail}
+                            src={proxyThumbnail(item.thumbnail)}
                             alt={item.title}
                             className="w-full h-full object-cover"
                             onError={(e) => {
@@ -2543,7 +2501,6 @@ export default function Home() {
                           </span>
                         </div>
                       </div>
-                      {/* Re-share from history */}
                       <button
                         onClick={() =>
                           shareOnWhatsApp(
@@ -2577,7 +2534,7 @@ export default function Home() {
             className="absolute inset-0"
             onClick={() => setIsProfileOpen(false)}
           ></div>
-          <div className="relative w-full sm:max-w-xl bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 sm:animate-in sm:zoom-in-95">
+          <div className="relative w-full sm:max-w-xl bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300">
             <div className="flex items-center justify-end px-4 py-3 border-b border-[#272727]">
               <button
                 onClick={() => setIsProfileOpen(false)}
@@ -2690,7 +2647,7 @@ export default function Home() {
             className="absolute inset-0"
             onClick={() => setIsFeedbackOpen(false)}
           ></div>
-          <div className="relative w-full sm:max-w-lg bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 sm:animate-in sm:zoom-in-95 flex flex-col">
+          <div className="relative w-full sm:max-w-lg bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 flex flex-col">
             <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-[#272727] flex items-center justify-between bg-[#1e1e1e]">
               <h3 className="text-base sm:text-lg font-bold text-[#f1f1f1] flex items-center gap-2">
                 <svg
@@ -2835,34 +2792,10 @@ export default function Home() {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f3f; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #717171; }
-
-        .audio-slider::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: #a855f7;
-          cursor: pointer;
-          border: 2px solid #0f0f0f;
-          box-shadow: 0 0 0 2px #a855f7;
-        }
-        .audio-slider::-moz-range-thumb {
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: #a855f7;
-          cursor: pointer;
-          border: 2px solid #0f0f0f;
-        }
+        .audio-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #a855f7; cursor: pointer; border: 2px solid #0f0f0f; box-shadow: 0 0 0 2px #a855f7; }
+        .audio-slider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #a855f7; cursor: pointer; border: 2px solid #0f0f0f; }
         .audio-slider:focus { outline: none; }
-
-        @media (max-width: 640px) {
-          .audio-slider::-webkit-slider-thumb {
-            width: 20px;
-            height: 20px;
-          }
-        }
+        @media (max-width: 640px) { .audio-slider::-webkit-slider-thumb { width: 20px; height: 20px; } }
       `,
         }}
       />
