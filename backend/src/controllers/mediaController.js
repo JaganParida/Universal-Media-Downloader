@@ -3,10 +3,10 @@ const path = require("path");
 const ffmpegBin = require("ffmpeg-static");
 const fs = require("fs");
 const os = require("os");
+const { execFile } = require("child_process");
 const { cleanUrl } = require("../utils/helpers");
 
 // ─── Platform Detection ───────────────────────────────────────────────────────
-
 const detectPlatform = (url) => {
   if (/instagram\.com/i.test(url)) return "instagram";
   if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) return "facebook";
@@ -17,7 +17,6 @@ const detectPlatform = (url) => {
 };
 
 // ─── URL Normalizers ──────────────────────────────────────────────────────────
-
 const normalizeYouTubeUrl = (url) => {
   try {
     const u = new URL(url);
@@ -53,21 +52,19 @@ const normalizeFacebookUrl = (url) => {
 };
 
 // ─── User Agents ──────────────────────────────────────────────────────────────
-
 const UA_DESKTOP =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const UA_INSTAGRAM_MOBILE =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
 // ─── BASE OPTIONS ─────────────────────────────────────────────────────────────
-
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
   noWarnings: true,
-  retries: 10,
-  fragmentRetries: 10,
-  socketTimeout: 60,
+  retries: 3,
+  fragmentRetries: 3,
+  socketTimeout: 30,
   noPlaylist: true,
   bufferSize: "16K",
   preferFreeFormats: true,
@@ -105,7 +102,6 @@ const getPlatformOptions = (platform) =>
   PLATFORM_OPTIONS[platform] ?? PLATFORM_OPTIONS.generic;
 
 // ─── Resolution Bucketing ─────────────────────────────────────────────────────
-
 const bucketResolution = (width, height) => {
   const short = Math.min(width || 0, height || 0);
   const long = Math.max(width || 0, height || 0);
@@ -156,7 +152,7 @@ const friendlyError = (rawMessage = "") => {
   return "Could not fetch media. Ensure the link is public and properly formatted.";
 };
 
-const withRetry = async (fn, maxAttempts = 3, delay = 1500) => {
+const withRetry = async (fn, maxAttempts = 2, delay = 1500) => {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -166,11 +162,8 @@ const withRetry = async (fn, maxAttempts = 3, delay = 1500) => {
       lastError = err;
       const msg = (err.message || err.stderr || "").toString();
       console.error(`⚠️ Attempt ${attempt} failed:`, msg.slice(0, 200));
-      const isTransient =
-        /network|timeout|connection|429|temporar|ECONN|503|502/i.test(msg);
       const isFatal = /private|login|not found|404|unsupported/i.test(msg);
-      if (isFatal || (!isTransient && attempt === maxAttempts)) throw err;
-      if (attempt === maxAttempts) throw err;
+      if (isFatal || attempt === maxAttempts) throw err;
       await new Promise((r) => setTimeout(r, delay * attempt));
     }
   }
@@ -178,7 +171,6 @@ const withRetry = async (fn, maxAttempts = 3, delay = 1500) => {
 };
 
 // ─── TEMP FILE FINDER ─────────────────────────────────────────────────────────
-
 const findTempFile = (basePath) => {
   if (fs.existsSync(basePath)) return basePath;
   const dir = path.dirname(basePath);
@@ -194,12 +186,11 @@ const findTempFile = (basePath) => {
     );
     if (finalFile) return path.join(dir, finalFile);
     if (files.length > 0) return path.join(dir, files[0]);
-  } catch (err) {}
+  } catch (_) {}
   return null;
 };
 
 // ─── getMediaInfo ─────────────────────────────────────────────────────────────
-
 const getMediaInfo = async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -217,7 +208,6 @@ const getMediaInfo = async (req, res) => {
     console.log(`📡 [INFO] Platform: ${platform} | URL: ${targetUrl}`);
 
     const options = getPlatformOptions(platform);
-
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
     );
@@ -231,9 +221,7 @@ const getMediaInfo = async (req, res) => {
       .filter((f) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
-        if (platform === "facebook" || platform === "instagram") {
-          return hasV;
-        }
+        if (platform === "facebook" || platform === "instagram") return hasV;
         return VALID_EXTS.has((f.ext || "").toLowerCase()) || hasV || hasA;
       })
       .forEach((f) => {
@@ -251,7 +239,6 @@ const getMediaInfo = async (req, res) => {
           }
           if (!w && h) w = h;
           if (!h && w) h = w;
-
           const bucketed = bucketResolution(w, h);
           cleanRes = bucketed.cleanRes;
           sortValue = bucketed.sortValue;
@@ -323,14 +310,12 @@ const getMediaInfo = async (req, res) => {
 };
 
 // ─── downloadMedia ────────────────────────────────────────────────────────────
-
 const downloadMedia = async (req, res) => {
   const { url, format_id, title } = req.query;
+  if (!url) return res.status(400).send("Missing URL");
 
   console.log("\n==========================================");
   console.log("🚀 [DOWNLOAD] INITIALIZING...");
-
-  if (!url) return res.status(400).send("Missing URL");
 
   const safeTitle =
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
@@ -347,7 +332,6 @@ const downloadMedia = async (req, res) => {
   const options = getPlatformOptions(platform);
 
   let formatStr;
-
   if (platform === "youtube") {
     if (format_id && format_id !== "best" && format_id !== "undefined") {
       formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/best[ext=mp4]/best`;
@@ -390,7 +374,7 @@ const downloadMedia = async (req, res) => {
             fs.unlinkSync(path.join(dir, f));
           } catch (_) {}
         });
-    } catch (e) {}
+    } catch (_) {}
   };
 
   try {
@@ -409,8 +393,6 @@ const downloadMedia = async (req, res) => {
     if (!actualFile) throw new Error("Output file was not created by yt-dlp.");
 
     const stat = fs.statSync(actualFile);
-    console.log(`📊 File size: ${(stat.size / 1_048_576).toFixed(2)} MB`);
-
     if (stat.size === 0) {
       cleanup();
       throw new Error("Downloaded file is empty. Video may be unavailable.");
@@ -434,7 +416,6 @@ const downloadMedia = async (req, res) => {
 
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
-
     stream.on("error", () => cleanup());
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
@@ -447,7 +428,6 @@ const downloadMedia = async (req, res) => {
 };
 
 // ─── getAudioInfo ─────────────────────────────────────────────────────────────
-
 const getAudioInfo = async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
@@ -455,9 +435,8 @@ const getAudioInfo = async (req, res) => {
   if (/instagram\.com\/reels\/audio\//i.test(url)) {
     return res.status(400).json({
       error:
-        "Instagram audio-page links (instagram.com/reels/audio/...) cannot be downloaded directly. " +
-        "Please open an actual Reel that uses this audio, copy that Reel's URL, and paste it here instead. " +
-        "Example format: instagram.com/reel/ABC123xyz/",
+        "Instagram audio-page links cannot be downloaded directly. " +
+        "Please open an actual Reel that uses this audio, copy that Reel's URL, and paste it here instead.",
     });
   }
 
@@ -481,7 +460,6 @@ const getAudioInfo = async (req, res) => {
     const durationSec = output.duration || 0;
     const formats = Array.isArray(output.formats) ? output.formats : [];
 
-    // For Instagram/Facebook, extract audio from best video format as fallback
     let audioFormats = formats
       .filter((f) => {
         const hasAudio = f.acodec && f.acodec !== "none";
@@ -512,9 +490,8 @@ const getAudioInfo = async (req, res) => {
       })
       .sort((a, b) => (b.abr || 0) - (a.abr || 0));
 
-    // If no pure audio formats (common for Instagram/Facebook), use bestaudio fallback
+    // Fallback: extract audio from combined streams (Instagram/Facebook)
     if (audioFormats.length === 0) {
-      // Try to find formats with audio from video+audio combined streams
       const combinedWithAudio = formats.filter(
         (f) => f.acodec && f.acodec !== "none",
       );
@@ -571,7 +548,6 @@ const getAudioInfo = async (req, res) => {
 };
 
 // ─── downloadAudio ────────────────────────────────────────────────────────────
-
 const downloadAudio = async (req, res) => {
   const { url, format_id, title, startTime, endTime } = req.query;
 
@@ -593,7 +569,6 @@ const downloadAudio = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // For Instagram/Facebook use bestaudio which will pick audio from combined stream
   let formatStr = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best";
   if (
     format_id &&
@@ -646,7 +621,6 @@ const downloadAudio = async (req, res) => {
       throw new Error("Downloaded audio is empty.");
     }
 
-    const { execFile } = require("child_process");
     const ffmpegArgs = ["-i", rawFile, "-y"];
 
     const start = parseFloat(startTime);
@@ -719,8 +693,7 @@ const downloadAudio = async (req, res) => {
 };
 
 // ─── searchSong ───────────────────────────────────────────────────────────────
-// FIX: Use ytsearch: with proper flat-playlist so results always parse correctly
-
+// FIXED: Use flat-playlist with ytsearch, robust entry parsing for yt-dlp v2024+
 const searchSong = async (req, res) => {
   const { query } = req.query;
   if (!query || !query.trim())
@@ -729,78 +702,94 @@ const searchSong = async (req, res) => {
   try {
     console.log(`🔍 [SONG SEARCH] Query: "${query}"`);
 
-    // Use ytsearch10 so we have enough results after filtering
-    const searchUrl = `ytsearch10:${query.trim()}`;
+    const searchUrl = `ytsearch8:${query.trim()}`;
 
-    const output = await withRetry(() =>
-      youtubedl(searchUrl, {
+    let output;
+    try {
+      // Primary: flat-playlist dump (fastest, most reliable)
+      output = await youtubedl(searchUrl, {
         ...PLATFORM_OPTIONS.youtube,
         dumpSingleJson: true,
         flatPlaylist: true,
         noPlaylist: false,
         ignoreErrors: true,
-      }),
-    );
+        skipDownload: true,
+      });
+    } catch (primaryErr) {
+      console.warn("⚠️ Primary search failed, trying fallback...");
+      // Fallback: no flat-playlist
+      output = await youtubedl(searchUrl, {
+        ...PLATFORM_OPTIONS.youtube,
+        dumpSingleJson: true,
+        noPlaylist: false,
+        ignoreErrors: true,
+        skipDownload: true,
+      });
+    }
 
-    // Safely parse entries — handle both playlist and single-video responses
+    // Safely parse entries
     let entries = [];
-    if (Array.isArray(output.entries) && output.entries.length > 0) {
+    if (Array.isArray(output?.entries) && output.entries.length > 0) {
       entries = output.entries;
-    } else if (output.id || output.url) {
+    } else if (output?.id || output?.webpage_url) {
+      // Single video returned instead of playlist
       entries = [output];
     }
 
     if (entries.length === 0) {
+      console.log("⚠️ No entries found in search output");
       return res.json({ results: [] });
     }
 
     const results = entries
-      .filter((e) => e && (e.id || e.url))
+      .filter((e) => e && (e.id || e.url || e.webpage_url))
       .slice(0, 8)
       .map((e) => {
-        // Safely extract thumbnail — flat-playlist entries may only have thumbnails array
+        // Resolve thumbnail robustly
         let thumbnail = e.thumbnail || null;
         if (
           !thumbnail &&
           Array.isArray(e.thumbnails) &&
           e.thumbnails.length > 0
         ) {
-          // Pick the largest thumbnail
           const sorted = [...e.thumbnails].sort(
             (a, b) =>
               (b.width || 0) * (b.height || 0) -
               (a.width || 0) * (a.height || 0),
           );
-          thumbnail = sorted[0].url || null;
+          thumbnail = sorted[0]?.url || null;
         }
-        // Fallback to YouTube's known thumbnail CDN if we have an id
-        if (!thumbnail && e.id) {
-          thumbnail = `https://i.ytimg.com/vi/${e.id}/mqdefault.jpg`;
+        // Guaranteed fallback using YouTube CDN
+        const videoId = e.id || e.url?.match(/[?&]v=([^&]+)/)?.[1] || null;
+        if (!thumbnail && videoId) {
+          thumbnail = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
         }
 
+        const pageUrl =
+          e.webpage_url ||
+          e.url ||
+          (videoId ? `https://www.youtube.com/watch?v=${videoId}` : null);
+
         return {
-          id: e.id || "",
-          title: e.title || "Unknown",
+          id: videoId || e.display_id || "",
+          title: e.title || e.fulltitle || "Unknown",
           duration: e.duration || 0,
           thumbnail,
-          url:
-            e.url ||
-            e.webpage_url ||
-            (e.id ? `https://www.youtube.com/watch?v=${e.id}` : ""),
+          url: pageUrl || "",
           uploader: e.uploader || e.channel || e.uploader_id || "",
           view_count: e.view_count || 0,
         };
       })
-      .filter((r) => r.url); // drop any entries without a URL
+      .filter((r) => r.url && r.id); // Only keep entries with a usable URL
 
     console.log(`✅ Found ${results.length} results`);
     return res.json({ results });
   } catch (error) {
     const msg = (error.stderr || error.message || "").toString();
     console.error("❌ [SEARCH ERROR]:", msg.slice(0, 500));
-    return res
-      .status(500)
-      .json({ error: "Song search failed. Please try again." });
+    return res.status(500).json({
+      error: "Song search failed. Please try again.",
+    });
   }
 };
 

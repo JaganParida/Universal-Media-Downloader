@@ -9,67 +9,42 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
   : ["*"];
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes("*")) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("Not allowed by CORS"));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Requested-With",
-    "Accept",
-    "Origin",
-  ],
-  exposedHeaders: ["Content-Length", "Content-Disposition", "Content-Type"],
-  optionsSuccessStatus: 200,
-};
-
-// Apply CORS middleware first — this handles preflight (OPTIONS) automatically
-app.use(cors(corsOptions));
-
-// Additional headers to fix NotSameOrigin / cross-origin blocking
+// ─── Preflight + CORS headers (must be FIRST, before any route) ───────────────
 app.use((req, res, next) => {
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-  res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
-  res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
   const origin = req.headers.origin;
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    origin && !allowedOrigins.includes("*") ? origin : "*",
-  );
+  res.setHeader("Access-Control-Allow-Origin", origin || "*");
   res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS",
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With, Accept, Origin",
+  );
   res.setHeader(
     "Access-Control-Expose-Headers",
     "Content-Length, Content-Disposition, Content-Type",
   );
-  // Handle preflight requests inline — no app.options() needed
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
+  res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
+
+  // Handle preflight immediately — never touches Express router
   if (req.method === "OPTIONS") {
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET, POST, PUT, DELETE, OPTIONS",
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Requested-With, Accept, Origin",
-    );
-    return res.sendStatus(200);
+    return res.status(200).end();
   }
   next();
 });
 
-// Body parsing
+// ─── Body Parsing ─────────────────────────────────────────────────────────────
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Routes
+// ─── Routes ───────────────────────────────────────────────────────────────────
 app.use("/api", mediaRoutes);
 
-// Health check
+// ─── Health Check ─────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -85,12 +60,12 @@ app.get("/", (req, res) => {
   });
 });
 
-// 404 handler
+// ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.path} not found` });
 });
 
-// Global error handler
+// ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error("💥 Unhandled error:", err.message);
   if (!res.headersSent) {
