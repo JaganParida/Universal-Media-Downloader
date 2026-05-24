@@ -578,22 +578,27 @@ const downloadAudio = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // 👇 FIX: Extremely strict format string to force yt-dlp to download an AUDIO track!
-  // If it can't find standalone audio, it will download both and merge them into an MKV.
-  let cleanFormat = format_id;
-  if (
-    !cleanFormat ||
-    cleanFormat === "auto" ||
-    cleanFormat === "undefined" ||
-    cleanFormat === "best" ||
-    cleanFormat === "bestaudio"
-  ) {
-    cleanFormat = "bestaudio/bestvideo+bestaudio/best";
+  // 👇 THE ULTIMATE FIX FOR INSTAGRAM MISSING STREAM ERRORS 👇
+  let formatStr;
+  if (platform === "instagram" || platform === "facebook") {
+    // We force yt-dlp to download the absolute best combined file available.
+    // This ensures there is ALWAYS an audio stream attached to the video before FFmpeg touches it.
+    formatStr = "best";
   } else {
-    cleanFormat = `${cleanFormat}+bestaudio/bestaudio/bestvideo+bestaudio/best`;
+    if (
+      format_id &&
+      format_id !== "bestaudio" &&
+      format_id !== "undefined" &&
+      format_id !== "best" &&
+      format_id !== "auto"
+    ) {
+      formatStr = `${format_id}/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best`;
+    } else {
+      formatStr = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best";
+    }
   }
 
-  console.log(`🎯 Audio format string: ${cleanFormat}`);
+  console.log(`🎯 Audio format string: ${formatStr}`);
 
   const tempBase = `aud_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempRawPath = path.join(os.tmpdir(), `${tempBase}_raw`);
@@ -619,13 +624,11 @@ const downloadAudio = async (req, res) => {
   try {
     const ytdlpOptions = {
       ...options,
-      format: cleanFormat,
+      format: formatStr,
       output: `${tempRawPath}.%(ext)s`,
-      // 👇 FIX: Allows yt-dlp to merge separated video+audio files if needed!
-      mergeOutputFormat: "mkv",
     };
 
-    console.log("⏳ Downloading audio with yt-dlp...");
+    console.log("⏳ Downloading media with yt-dlp...");
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
 
     let actualRawFile = findTempFile(tempRawPath);
@@ -638,18 +641,19 @@ const downloadAudio = async (req, res) => {
           (f) =>
             f.startsWith(base) && !f.endsWith(".part") && !f.endsWith(".ytdl"),
         );
-      if (!found) throw new Error("Audio file was not created by yt-dlp.");
+      if (!found)
+        throw new Error("File was not created by yt-dlp. Download failed.");
       actualRawFile = path.join(dir, found);
     }
 
     const rawStat = fs.statSync(actualRawFile);
     if (rawStat.size === 0) {
       cleanup();
-      throw new Error("Downloaded audio is empty.");
+      throw new Error("Downloaded media is empty.");
     }
 
     console.log(
-      `✅ Raw audio: ${(rawStat.size / 1_048_576).toFixed(2)} MB at ${actualRawFile}`,
+      `✅ Raw media downloaded: ${(rawStat.size / 1_048_576).toFixed(2)} MB at ${actualRawFile}`,
     );
 
     // ── ffmpeg: convert to MP3, optionally trim ───────────────────────────────
@@ -665,7 +669,7 @@ const downloadAudio = async (req, res) => {
     }
 
     ffmpegArgs.push(
-      "-vn", // strip video track
+      "-vn", // strip video track securely
       "-acodec",
       "libmp3lame",
       "-ab",
@@ -678,10 +682,11 @@ const downloadAudio = async (req, res) => {
     await new Promise((resolve, reject) => {
       execFile(ffmpegBin, ffmpegArgs, (err, _stdout, stderr) => {
         if (err) {
-          console.error("❌ FFmpeg full error:", err);
-          console.error("❌ FFmpeg stderr:", stderr);
+          console.error("❌ FFmpeg error details:", stderr);
           reject(
-            new Error("Audio conversion failed: " + (stderr || err.message)),
+            new Error(
+              "Audio extraction failed. The original Reel might be missing an audio track.",
+            ),
           );
         } else {
           resolve();
@@ -713,10 +718,12 @@ const downloadAudio = async (req, res) => {
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
   } catch (error) {
-    const msg = (error.stderr || error.message || "").toString();
-    console.error("❌ [AUDIO DOWNLOAD ERROR]:", msg.slice(0, 500));
+    const msg = (error.stderr || error.message || "Unknown error").toString();
+
+    // 👇 FULLY UNMASKED: Server console will print the truth, and so will your browser!
+    console.error("\n❌ [AUDIO DOWNLOAD RAW ERROR]:\n", msg);
     cleanup();
-    if (!res.headersSent) res.status(500).send(friendlyError(msg));
+    if (!res.headersSent) res.status(500).send(`RAW SERVER ERROR: ${msg}`);
   }
 };
 
