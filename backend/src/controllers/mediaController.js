@@ -742,7 +742,7 @@ const downloadAudio = async (req, res) => {
     const msg = (error.stderr || error.message || "").toString();
     console.error("❌ [AUDIO DOWNLOAD ERROR]:", msg.slice(0, 500));
     cleanup();
-    if (!res.headersSent) res.status(500).send(friendlyError(msg));
+    if (!res.headersSent) res.status(500).send(msg);
   }
 };
 

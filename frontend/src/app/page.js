@@ -604,6 +604,7 @@ export default function Home() {
         setAudioDownloadProgress(0);
       }, 3000);
     } catch (err) {
+      console.error("🔴 AUDIO DOWNLOAD CRASHED:", err);
       setReelError(err.message || "Audio download failed");
       setIsAudioDownloading(false);
       setAudioDownloadProgress(0);
