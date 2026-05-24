@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 
-const API_BASE = "https://universal-media-downloader-re6r.onrender.com";
+const API_BASE = "https://universal-media-downloader-9lff.onrender.com";
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 const formatDuration = (secs) => {
