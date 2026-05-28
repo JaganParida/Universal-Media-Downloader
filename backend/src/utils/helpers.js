@@ -1,3 +1,4 @@
+// helpers.js
 const TRACKING_PARAMS = [
   "si",
   "igshid",
@@ -35,6 +36,7 @@ const cleanUrl = (rawUrl) => {
     const parsedUrl = new URL(trimmed);
     TRACKING_PARAMS.forEach((param) => parsedUrl.searchParams.delete(param));
 
+    // ── Facebook-specific normalization ──────────────────────────────────
     if (/facebook\.com/i.test(parsedUrl.hostname)) {
       const vParam = parsedUrl.searchParams.get("v");
       if (vParam && parsedUrl.pathname === "/watch/") {
@@ -44,6 +46,8 @@ const cleanUrl = (rawUrl) => {
       }
     }
 
+    // ── Instagram-specific normalization ─────────────────────────────────
+    // Strip all query params for Instagram — they are all tracking
     if (/instagram\.com/i.test(parsedUrl.hostname)) {
       parsedUrl.search = "";
     }
