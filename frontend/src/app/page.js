@@ -22,9 +22,6 @@ const formatViews = (n) => {
 };
 
 // ─── Sanitize format_id before sending to backend ─────────────────────────────
-// Prevents selector strings like "bestaudio/best" from being sent as format_id,
-// which caused 500 errors. The backend now also guards against this, but
-// defence-in-depth is better.
 const sanitizeFormatId = (id) => {
   if (!id) return "auto";
   if (
@@ -34,7 +31,6 @@ const sanitizeFormatId = (id) => {
     id === "auto"
   )
     return "auto";
-  // Real yt-dlp format IDs are numeric or short alphanumeric; no slashes/brackets
   if (/[/+[\]()]/.test(id)) return "auto";
   return id;
 };
@@ -365,9 +361,7 @@ export default function Home() {
     setDownloadProgress(0);
     setIsDropdownOpen(false);
 
-    // Sanitize format_id — never send selector strings to the backend
     const cleanFormatId = sanitizeFormatId(selectedFormatObj.format_id);
-
     const downloadUrl = `${API_BASE}/api/download?url=${encodeURIComponent(url)}&format_id=${encodeURIComponent(cleanFormatId)}&title=${encodeURIComponent(videoData.title)}`;
     try {
       const response = await fetch(downloadUrl);
@@ -562,7 +556,6 @@ export default function Home() {
     setIsAudioDownloading(true);
     setAudioDownloadProgress(0);
 
-    // Sanitize format_id before adding to query string
     const cleanFormatId = sanitizeFormatId(selectedAudioFormat?.format_id);
 
     const params = new URLSearchParams({
@@ -662,7 +655,7 @@ export default function Home() {
 
     const params = new URLSearchParams({
       url: song.url,
-      format_id: "auto", // always use auto for song search — no specific format_id available
+      format_id: "auto",
       title: song.title || "song",
     });
 
@@ -743,7 +736,7 @@ export default function Home() {
     setFeedbackMessage("");
   };
 
-  // ─── Share Dropdown ───────────────────────────────────────────────────────────
+  // ─── Share Dropdown Component ─────────────────────────────────────────────────
   const ShareDropdown = ({ onShare, hasNativeShare, isOpen, menuRef }) => (
     <div ref={menuRef} className="relative">
       {isOpen && (
