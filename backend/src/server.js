@@ -110,7 +110,7 @@ app.get("/", (_req, res) => {
   res.json({
     status: "ok",
     message: "MediaPro API is running",
-    version: "2.2.0",
+    version: "2.3.0",
     endpoints: {
       info: "POST /api/info",
       download: "GET /api/download",
