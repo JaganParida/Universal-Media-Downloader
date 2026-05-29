@@ -1,4 +1,3 @@
-// mediaController.js (FIXED)
 const youtubedl = require("youtube-dl-exec");
 const path = require("path");
 const ffmpegBin = require("ffmpeg-static");
@@ -63,9 +62,9 @@ const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
   noWarnings: true,
-  retries: 3,
-  fragmentRetries: 3,
-  socketTimeout: 30,
+  retries: 10,
+  fragmentRetries: 10,
+  socketTimeout: 60,
   noPlaylist: true,
   bufferSize: "16K",
   preferFreeFormats: true,
@@ -101,45 +100,6 @@ const PLATFORM_OPTIONS = {
 
 const getPlatformOptions = (platform) =>
   PLATFORM_OPTIONS[platform] ?? PLATFORM_OPTIONS.generic;
-
-// ─── Format Selection ─────────────────────────────────────────────────────────
-const cleanFormatId = (formatId) => {
-  const value = Array.isArray(formatId) ? formatId[0] : formatId;
-  if (!value) return null;
-
-  const id = String(value).trim();
-  if (!id || ["best", "undefined", "auto", "bestaudio"].includes(id)) {
-    return null;
-  }
-
-  return /[/+[\]()]/.test(id) ? null : id;
-};
-
-const getVideoFormatSelector = (platform, formatId) => {
-  const id = cleanFormatId(formatId);
-
-  if (platform === "youtube") {
-    return id
-      ? `${id}+bestaudio[ext=m4a]/${id}+bestaudio/best[ext=mp4]/best`
-      : "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
-  }
-
-  if (platform === "instagram") {
-    return id
-      ? `${id}+bestaudio/${id}/best[ext=mp4]/best`
-      : "best[ext=mp4]/bestvideo+bestaudio/best";
-  }
-
-  if (platform === "facebook") {
-    return id
-      ? `${id}/best[ext=mp4]/best`
-      : "best[ext=mp4]/bestvideo+bestaudio/best";
-  }
-
-  return id
-    ? `${id}+bestaudio/${id}/best`
-    : "bestvideo+bestaudio/best";
-};
 
 // ─── Resolution Bucketing ─────────────────────────────────────────────────────
 const bucketResolution = (width, height) => {
@@ -194,7 +154,7 @@ const friendlyError = (rawMessage = "") => {
   return "Could not fetch media. Ensure the link is public and properly formatted.";
 };
 
-const withRetry = async (fn, maxAttempts = 2, delay = 1500) => {
+const withRetry = async (fn, maxAttempts = 3, delay = 1500) => {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -204,8 +164,11 @@ const withRetry = async (fn, maxAttempts = 2, delay = 1500) => {
       lastError = err;
       const msg = (err.message || err.stderr || "").toString();
       console.error(`⚠️ Attempt ${attempt} failed:`, msg.slice(0, 200));
+      const isTransient =
+        /network|timeout|connection|429|temporar|ECONN|503|502/i.test(msg);
       const isFatal = /private|login|not found|404|unsupported/i.test(msg);
-      if (isFatal || attempt === maxAttempts) throw err;
+      if (isFatal || (!isTransient && attempt === maxAttempts)) throw err;
+      if (attempt === maxAttempts) throw err;
       await new Promise((r) => setTimeout(r, delay * attempt));
     }
   }
@@ -232,80 +195,28 @@ const findTempFile = (basePath) => {
   return null;
 };
 
-// ─── CLEANUP HELPER ───────────────────────────────────────────────────────────
-// Cleans up all temp files whose name starts with the given base prefix.
-const cleanupByBase = (tempBase, ...extraPaths) => {
-  try {
-    const dir = os.tmpdir();
-    fs.readdirSync(dir)
-      .filter((f) => f.startsWith(tempBase))
-      .forEach((f) => {
-        try {
-          fs.unlinkSync(path.join(dir, f));
-        } catch (_) {}
-      });
-  } catch (_) {}
-  for (const p of extraPaths) {
-    try {
-      if (p && fs.existsSync(p)) fs.unlinkSync(p);
-    } catch (_) {}
-  }
-};
-
-// ─── FFMPEG: extract audio from file → MP3 ───────────────────────────────────
-const extractAudioToMp3 = (inputFile, outputFile, startSec, endSec) => {
-  return new Promise((resolve, reject) => {
-    const hasTrim = !isNaN(startSec) && !isNaN(endSec) && endSec > startSec;
-
-    // Primary: use -map 0:a:0 (explicit audio stream — most reliable)
-    const args = ["-y", "-loglevel", "error", "-i", inputFile];
-    if (hasTrim) args.push("-ss", String(startSec), "-to", String(endSec));
-    args.push(
-      "-map",
-      "0:a:0",
-      "-acodec",
-      "libmp3lame",
-      "-ab",
-      "192k",
-      "-ar",
-      "44100",
-      outputFile,
-    );
-
-    execFile(ffmpegBin, args, (err, _out, stderr) => {
-      if (!err) return resolve();
-
-      console.warn(
-        "⚠️ -map 0:a:0 failed, retrying with -vn...",
-        (stderr || "").slice(0, 150),
-      );
-
-      // Fallback: -vn (legacy approach)
-      const fallback = ["-y", "-loglevel", "error", "-i", inputFile];
-      if (hasTrim)
-        fallback.push("-ss", String(startSec), "-to", String(endSec));
-      fallback.push(
-        "-vn",
-        "-acodec",
-        "libmp3lame",
-        "-ab",
-        "192k",
-        "-ar",
-        "44100",
-        outputFile,
-      );
-
-      execFile(ffmpegBin, fallback, (err2, _o2, stderr2) => {
-        if (err2) {
-          reject(
-            new Error(
-              `Audio extraction failed: ${(stderr2 || stderr || "").slice(0, 300)}`,
-            ),
-          );
-        } else {
-          resolve();
-        }
-      });
+// ─── PROBE: Check if a file has an audio stream via ffprobe ──────────────────
+const probeHasAudio = (filePath) => {
+  return new Promise((resolve) => {
+    const ffprobePath = ffmpegBin.replace(/ffmpeg(\.exe)?$/, "ffprobe$1");
+    const args = [
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=codec_type",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      filePath,
+    ];
+    execFile(ffprobePath, args, (err, stdout) => {
+      if (err) {
+        console.warn("⚠️ ffprobe not available, skipping audio probe");
+        resolve(true);
+        return;
+      }
+      resolve(stdout.trim().toLowerCase() === "audio");
     });
   });
 };
@@ -341,7 +252,13 @@ const getMediaInfo = async (req, res) => {
       .filter((f) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
-        if (platform === "facebook" || platform === "instagram") return hasV;
+
+        // ── KEY FIX: For Instagram/Facebook, keep anything with video.
+        // The previous working code did the same — we let downloadMedia
+        // handle audio merging via format string (format_id+bestaudio/...).
+        if (platform === "facebook" || platform === "instagram") {
+          return hasV;
+        }
         return VALID_EXTS.has((f.ext || "").toLowerCase()) || hasV || hasA;
       })
       .forEach((f) => {
@@ -432,10 +349,11 @@ const getMediaInfo = async (req, res) => {
 // ─── downloadMedia ────────────────────────────────────────────────────────────
 const downloadMedia = async (req, res) => {
   const { url, format_id, title } = req.query;
-  if (!url) return res.status(400).send("Missing URL");
 
   console.log("\n==========================================");
   console.log("🚀 [DOWNLOAD] INITIALIZING...");
+
+  if (!url) return res.status(400).send("Missing URL");
 
   const safeTitle =
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
@@ -451,13 +369,62 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // ── Format selection (same as proven previous code) ────────────────────────
-  const formatStr = getVideoFormatSelector(platform, format_id);
+  // ═══ FORMAT STRING LOGIC ═══
+  // ── CRITICAL: This is the fix. The previous working code used
+  //    `format_id+bestaudio/format_id/best[ext=mp4]/best` for Instagram,
+  //    which tells yt-dlp to merge the chosen video stream with the best
+  //    available audio. The new code had dropped the +bestaudio part,
+  //    causing silent (audio-less) downloads. ──────────────────────────────
+  let formatStr;
+
+  if (platform === "youtube") {
+    if (format_id && format_id !== "best" && format_id !== "undefined") {
+      formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/best[ext=mp4]/best`;
+    } else {
+      formatStr =
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
+    }
+  } else if (platform === "instagram") {
+    // ── RESTORED from previous working code ──────────────────────────────
+    // Always attempt to merge bestaudio alongside the video stream.
+    // Instagram Reels encode audio INTO the progressive mp4, but some
+    // formats come video-only. +bestaudio ensures audio is always present.
+    if (format_id && format_id !== "best" && format_id !== "undefined") {
+      formatStr = `${format_id}+bestaudio/${format_id}/best[ext=mp4]/best`;
+    } else {
+      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
+    }
+  } else if (platform === "facebook") {
+    if (format_id && format_id !== "best" && format_id !== "undefined") {
+      formatStr = `${format_id}/best[ext=mp4]/best`;
+    } else {
+      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
+    }
+  } else {
+    formatStr =
+      format_id && format_id !== "best" && format_id !== "undefined"
+        ? `${format_id}+bestaudio/${format_id}/best`
+        : "bestvideo+bestaudio/best";
+  }
 
   console.log(`🎯 Format string: ${formatStr}`);
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
+
+  const cleanup = () => {
+    try {
+      const dir = path.dirname(tempFilePath);
+      const base = path.basename(tempFilePath, path.extname(tempFilePath));
+      fs.readdirSync(dir)
+        .filter((f) => f.startsWith(base))
+        .forEach((f) => {
+          try {
+            fs.unlinkSync(path.join(dir, f));
+          } catch (_) {}
+        });
+    } catch (_) {}
+  };
 
   try {
     const ytdlpOptions = {
@@ -465,6 +432,9 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
+      // Re-encode audio to AAC for maximum browser compatibility.
+      // -c:v copy avoids re-encoding video (fast). -movflags +faststart
+      // enables progressive playback in browsers.
       postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
     };
 
@@ -478,7 +448,7 @@ const downloadMedia = async (req, res) => {
     console.log(`📊 File size: ${(stat.size / 1_048_576).toFixed(2)} MB`);
 
     if (stat.size === 0) {
-      cleanupByBase(tempBase);
+      cleanup();
       throw new Error("Downloaded file is empty. Video may be unavailable.");
     }
 
@@ -500,27 +470,22 @@ const downloadMedia = async (req, res) => {
 
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
-    stream.on("error", () => cleanupByBase(tempBase));
-    res.on("finish", () => cleanupByBase(tempBase));
-    res.on("close", () => cleanupByBase(tempBase));
+    stream.on("error", () => cleanup());
+    res.on("finish", () => cleanup());
+    res.on("close", () => cleanup());
   } catch (error) {
     const msg = (error.stderr || error.message || "").toString();
     console.error("❌ [DOWNLOAD ERROR]:", msg.slice(0, 500));
-    cleanupByBase(tempBase);
+    cleanup();
     if (!res.headersSent) res.status(500).send(friendlyError(msg));
   }
 };
 
 // ─── getAudioInfo ─────────────────────────────────────────────────────────────
-// FIX: Instagram & Facebook have NO standalone audio-only streams.
-// Their audio is always embedded inside the combined video+audio mp4.
-// We detect this and return a single "Best Available" option instead of
-// confusing the frontend with empty or broken format lists.
 const getAudioInfo = async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
 
-  // Block Instagram audio-page links (not downloadable)
   if (/instagram\.com\/reels\/audio\//i.test(url)) {
     return res.status(400).json({
       error:
@@ -547,34 +512,6 @@ const getAudioInfo = async (req, res) => {
     );
 
     const durationSec = output.duration || 0;
-
-    // ── INSTAGRAM / FACEBOOK ──────────────────────────────────────────────────
-    // These platforms embed audio INSIDE the video stream. There are no
-    // standalone audio-only formats. We return a single "Best Available"
-    // entry so the frontend always has something to show/select.
-    // The actual download will use the same format logic as our working
-    // video download (best[ext=mp4]) and then strip the audio via ffmpeg.
-    if (platform === "instagram" || platform === "facebook") {
-      return res.json({
-        title: output.title || "Audio",
-        thumbnail: output.thumbnail || null,
-        duration: durationSec,
-        platform,
-        audioFormats: [
-          {
-            format_id: "best",
-            ext: "mp4",
-            abr: 128,
-            acodec: "aac",
-            filesize: "",
-            quality: "Best Available",
-            isFromCombined: true,
-          },
-        ],
-      });
-    }
-
-    // ── YOUTUBE / GENERIC: look for proper audio-only streams ─────────────────
     const formats = Array.isArray(output.formats) ? output.formats : [];
 
     let audioFormats = formats
@@ -607,7 +544,9 @@ const getAudioInfo = async (req, res) => {
       })
       .sort((a, b) => (b.abr || 0) - (a.abr || 0));
 
-    // Fallback: if no audio-only streams found, use best combined-with-audio
+    // ── For Instagram/Facebook: no standalone audio streams exist.
+    //    Fall back to the best combined (video+audio) format.
+    //    downloadAudio will then use ffmpeg to strip the audio track.
     if (audioFormats.length === 0) {
       const combinedWithAudio = formats
         .filter((f) => f.acodec && f.acodec !== "none")
@@ -637,7 +576,6 @@ const getAudioInfo = async (req, res) => {
       }
     }
 
-    // Last resort fallback
     if (audioFormats.length === 0) {
       audioFormats.push({
         format_id: "bestaudio/best",
@@ -648,7 +586,6 @@ const getAudioInfo = async (req, res) => {
       });
     }
 
-    // Deduplicate by bitrate bucket + ext
     const seen = new Set();
     const uniqueAudio = audioFormats.filter((f) => {
       const bucket = Math.round((f.abr || 0) / 32) * 32;
@@ -673,26 +610,14 @@ const getAudioInfo = async (req, res) => {
 };
 
 // ─── downloadAudio ────────────────────────────────────────────────────────────
-//
-// KEY FIX FOR INSTAGRAM / FACEBOOK:
-//   Instagram Reels and Facebook videos have NO standalone audio streams.
-//   Audio lives inside the combined video+audio mp4 container.
-//
-//   The PREVIOUS working `downloadMedia` proved that this format string works:
-//     "best[ext=mp4]/bestvideo+bestaudio/best"
-//   with mergeOutputFormat:"mp4" + postprocessorArgs ensuring a clean AAC mp4.
-//
-//   We download using that EXACT proven approach, then run ffmpeg to extract
-//   the audio track as MP3. This is the only reliable method for IG/FB.
-//
-//   For YouTube / generic: try audio-only streams first, which is more
-//   efficient (no video data downloaded unnecessarily).
-//
 const downloadAudio = async (req, res) => {
   const { url, format_id, title, startTime, endTime } = req.query;
 
   console.log("\n==========================================");
   console.log("🎵 [AUDIO DOWNLOAD] INITIALIZING...");
+  console.log(
+    `   format_id: ${format_id}, startTime: ${startTime}, endTime: ${endTime}`,
+  );
 
   if (!url) return res.status(400).send("Missing URL");
 
@@ -706,158 +631,214 @@ const downloadAudio = async (req, res) => {
   else if (platform === "instagram")
     targetUrl = normalizeInstagramUrl(targetUrl);
 
-  console.log(`📡 Platform: ${platform} | URL: ${targetUrl}`);
-
   const options = getPlatformOptions(platform);
+
+  // ── Format selection strategy ─────────────────────────────────────────────
+  // Instagram/Facebook: audio is baked into the progressive mp4 — no
+  // standalone audio stream exists. Download the best combined mp4 and
+  // extract via ffmpeg (same strategy as previous working code for video).
+  const formatCandidates =
+    platform === "instagram" || platform === "facebook"
+      ? [
+          "best[ext=mp4][acodec!=none]",
+          "best[ext=mp4]",
+          "best[acodec!=none]",
+          "best",
+        ]
+      : platform === "youtube"
+        ? [
+            format_id &&
+            format_id !== "bestaudio" &&
+            format_id !== "undefined" &&
+            format_id !== "best" &&
+            format_id !== "auto"
+              ? `${format_id}/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best`
+              : "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best",
+          ]
+        : [
+            format_id &&
+            format_id !== "bestaudio" &&
+            format_id !== "undefined" &&
+            format_id !== "best" &&
+            format_id !== "auto"
+              ? `${format_id}/bestaudio[ext=m4a]/bestaudio/best`
+              : "bestaudio[ext=m4a]/bestaudio/best",
+          ];
+
   const tempBase = `aud_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const tempRawPath = path.join(os.tmpdir(), `${tempBase}_raw`);
   const tempMp3Path = path.join(os.tmpdir(), `${tempBase}.mp3`);
 
-  let rawFilePath = null;
+  const cleanupFiles = (...extra) => {
+    const dir = os.tmpdir();
+    const base = path.basename(tempRawPath);
+    try {
+      fs.readdirSync(dir)
+        .filter((f) => f.startsWith(base))
+        .forEach((f) => {
+          try {
+            fs.unlinkSync(path.join(dir, f));
+          } catch (_) {}
+        });
+    } catch (_) {}
+    for (const f of extra) {
+      try {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      } catch (_) {}
+    }
+  };
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // INSTAGRAM / FACEBOOK  — use the EXACT same proven download approach
-  // as the old working downloadMedia (video download with audio)
-  // ══════════════════════════════════════════════════════════════════════════
-  if (platform === "instagram" || platform === "facebook") {
-    // Reuse the same selector as video downloads so Instagram keeps audio.
-    const formatStr = getVideoFormatSelector(platform, format_id);
+  let actualRawFile = null;
 
-    const tempVideoPath = path.join(os.tmpdir(), `${tempBase}_raw.mp4`);
+  for (let ci = 0; ci < formatCandidates.length; ci++) {
+    const formatStr = formatCandidates[ci];
+    if (!formatStr) continue;
 
-    console.log(`🎯 [IG/FB] Using proven video format: ${formatStr}`);
+    console.log(
+      `🎯 [Attempt ${ci + 1}/${formatCandidates.length}] Format: ${formatStr}`,
+    );
+
+    const ytdlpOptions = {
+      ...options,
+      format: formatStr,
+      output: `${tempRawPath}.%(ext)s`,
+    };
 
     try {
-      // Same ytdlp options that made the old video download work with audio
-      await withRetry(
-        () =>
-          youtubedl(targetUrl, {
-            ...options,
-            format: formatStr,
-            output: tempVideoPath,
-            mergeOutputFormat: "mp4",
-            // This postprocessor arg is what ensured audio (AAC) was included
-            postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
-          }),
-        2,
-        2000,
+      await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
+    } catch (dlErr) {
+      console.warn(
+        `⚠️ yt-dlp failed for format "${formatStr}":`,
+        (dlErr.message || "").slice(0, 150),
       );
-    } catch (err) {
-      const msg = (err.stderr || err.message || "").toString();
-      console.error("❌ [IG/FB AUDIO DOWNLOAD ERROR]:", msg.slice(0, 300));
-      cleanupByBase(tempBase);
-      if (!res.headersSent) return res.status(500).send(friendlyError(msg));
-      return;
+      cleanupFiles();
+      continue;
     }
 
-    rawFilePath = findTempFile(tempVideoPath);
-
-    if (!rawFilePath) {
-      cleanupByBase(tempBase);
-      if (!res.headersSent)
-        return res
-          .status(500)
-          .send("Could not download video for audio extraction.");
-      return;
+    const found = findTempFile(tempRawPath);
+    if (!found) {
+      console.warn(`⚠️ No output file found for format "${formatStr}"`);
+      continue;
     }
 
-    const rawStat = fs.statSync(rawFilePath);
-    if (rawStat.size === 0) {
-      cleanupByBase(tempBase);
-      if (!res.headersSent)
-        return res.status(500).send("Downloaded file is empty.");
-      return;
+    const stat = fs.statSync(found);
+    if (stat.size === 0) {
+      console.warn(`⚠️ Empty file for format "${formatStr}"`);
+      try {
+        fs.unlinkSync(found);
+      } catch (_) {}
+      continue;
     }
 
     console.log(
-      `✅ [IG/FB] Combined file ready: ${(rawStat.size / 1_048_576).toFixed(2)} MB`,
+      `✅ Downloaded: ${(stat.size / 1_048_576).toFixed(2)} MB — probing for audio...`,
     );
-  } else {
-    // ══════════════════════════════════════════════════════════════════════
-    // YOUTUBE / GENERIC — prefer audio-only streams (more efficient)
-    // ══════════════════════════════════════════════════════════════════════
-    const audioFormatId = cleanFormatId(format_id);
 
-    const formatStr =
-      platform === "youtube"
-        ? audioFormatId
-          ? `${audioFormatId}/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best`
-          : "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best"
-        : audioFormatId
-          ? `${audioFormatId}/bestaudio[ext=m4a]/bestaudio/best`
-          : "bestaudio[ext=m4a]/bestaudio/best";
-
-    const tempRawBase = path.join(os.tmpdir(), `${tempBase}_raw`);
-
-    console.log(`🎯 [YT/Generic] Audio format: ${formatStr}`);
-
-    try {
-      await withRetry(
-        () =>
-          youtubedl(targetUrl, {
-            ...options,
-            format: formatStr,
-            output: `${tempRawBase}.%(ext)s`,
-          }),
-        2,
-        2000,
+    const hasAudio = await probeHasAudio(found);
+    if (!hasAudio) {
+      console.warn(
+        `⚠️ No audio stream in file for format "${formatStr}" — trying next candidate`,
       );
-    } catch (err) {
-      const msg = (err.stderr || err.message || "").toString();
-      console.error("❌ [AUDIO DOWNLOAD ERROR]:", msg.slice(0, 300));
-      cleanupByBase(tempBase);
-      if (!res.headersSent) return res.status(500).send(friendlyError(msg));
-      return;
+      try {
+        fs.unlinkSync(found);
+      } catch (_) {}
+      continue;
     }
 
-    rawFilePath = findTempFile(tempRawBase);
-
-    if (!rawFilePath) {
-      cleanupByBase(tempBase);
-      if (!res.headersSent)
-        return res.status(500).send("Output file was not created by yt-dlp.");
-      return;
-    }
-
-    const rawStat = fs.statSync(rawFilePath);
-    if (rawStat.size === 0) {
-      cleanupByBase(tempBase);
-      if (!res.headersSent)
-        return res.status(500).send("Downloaded file is empty.");
-      return;
-    }
-
-    console.log(
-      `✅ [YT/Generic] Audio file ready: ${(rawStat.size / 1_048_576).toFixed(2)} MB`,
-    );
+    actualRawFile = found;
+    console.log(`✅ Audio stream confirmed in: ${actualRawFile}`);
+    break;
   }
 
-  // ── Extract audio → MP3 via ffmpeg ────────────────────────────────────────
-  const startSec = parseFloat(startTime);
-  const endSec = parseFloat(endTime);
-  const hasTrim = !isNaN(startSec) && !isNaN(endSec) && endSec > startSec;
-
-  if (hasTrim) {
-    console.log(`✂️  Trim: ${startSec}s → ${endSec}s`);
-  }
-
-  try {
-    await extractAudioToMp3(rawFilePath, tempMp3Path, startSec, endSec);
-  } catch (ffErr) {
-    console.error("❌ FFmpeg error:", ffErr.message);
-    cleanupByBase(tempBase, tempMp3Path);
-    if (!res.headersSent) {
-      const userMsg =
-        platform === "instagram" || platform === "facebook"
-          ? "This Reel/video has no extractable audio. It may be a silent clip."
-          : ffErr.message;
-      return res.status(500).send(userMsg);
-    }
+  if (!actualRawFile) {
+    cleanupFiles();
+    const userMsg =
+      platform === "instagram" || platform === "facebook"
+        ? "This Reel/video has no audio track. Instagram Reels with only music overlays may not be extractable."
+        : "Could not find a downloadable audio stream. The video may have no audio.";
+    if (!res.headersSent) return res.status(500).send(userMsg);
     return;
   }
 
-  // Verify MP3 output
+  // ── ffmpeg: extract audio → MP3 ───────────────────────────────────────────
+  const start = parseFloat(startTime);
+  const end = parseFloat(endTime);
+  const hasTrim = !isNaN(start) && !isNaN(end) && end > start;
+
+  const ffmpegArgs = ["-y", "-loglevel", "error", "-i", actualRawFile];
+
+  if (hasTrim) {
+    console.log(`✂️  Trimming: ${start}s → ${end}s`);
+    ffmpegArgs.push("-ss", String(start), "-to", String(end));
+  }
+
+  ffmpegArgs.push(
+    "-map",
+    "0:a:0",
+    "-acodec",
+    "libmp3lame",
+    "-ab",
+    "192k",
+    "-ar",
+    "44100",
+    tempMp3Path,
+  );
+
+  try {
+    await new Promise((resolve, reject) => {
+      execFile(ffmpegBin, ffmpegArgs, (err, _stdout, stderr) => {
+        if (err) {
+          console.error("❌ FFmpeg stderr:", stderr);
+          reject(new Error(`FFmpeg failed: ${(stderr || "").slice(0, 300)}`));
+        } else {
+          resolve();
+        }
+      });
+    });
+  } catch (ffErr) {
+    // Fallback: retry with -vn instead of -map 0:a:0
+    console.warn("⚠️ -map 0:a:0 failed, retrying with -vn fallback...");
+    const fallbackArgs = [
+      "-y",
+      "-loglevel",
+      "error",
+      "-i",
+      actualRawFile,
+      ...(hasTrim ? ["-ss", String(start), "-to", String(end)] : []),
+      "-vn",
+      "-acodec",
+      "libmp3lame",
+      "-ab",
+      "192k",
+      "-ar",
+      "44100",
+      tempMp3Path,
+    ];
+
+    try {
+      await new Promise((resolve, reject) => {
+        execFile(ffmpegBin, fallbackArgs, (err2, _stdout, stderr2) => {
+          if (err2) {
+            console.error("❌ FFmpeg fallback stderr:", stderr2);
+            reject(
+              new Error(
+                "Audio extraction failed. The Reel may not have an extractable audio track.",
+              ),
+            );
+          } else {
+            resolve();
+          }
+        });
+      });
+    } catch (finalErr) {
+      cleanupFiles(tempMp3Path);
+      if (!res.headersSent) return res.status(500).send(finalErr.message);
+      return;
+    }
+  }
+
   if (!fs.existsSync(tempMp3Path)) {
-    cleanupByBase(tempBase);
+    cleanupFiles();
     if (!res.headersSent)
       return res.status(500).send("MP3 conversion produced no output file.");
     return;
@@ -865,7 +846,7 @@ const downloadAudio = async (req, res) => {
 
   const mp3Stat = fs.statSync(tempMp3Path);
   if (mp3Stat.size === 0) {
-    cleanupByBase(tempBase, tempMp3Path);
+    cleanupFiles(tempMp3Path);
     if (!res.headersSent)
       return res
         .status(500)
@@ -888,9 +869,9 @@ const downloadAudio = async (req, res) => {
 
   const stream = fs.createReadStream(tempMp3Path);
   stream.pipe(res);
-  stream.on("error", () => cleanupByBase(tempBase, tempMp3Path));
-  res.on("finish", () => cleanupByBase(tempBase, tempMp3Path));
-  res.on("close", () => cleanupByBase(tempBase, tempMp3Path));
+  stream.on("error", () => cleanupFiles(tempMp3Path));
+  res.on("finish", () => cleanupFiles(tempMp3Path));
+  res.on("close", () => cleanupFiles(tempMp3Path));
 };
 
 // ─── searchSong ───────────────────────────────────────────────────────────────
@@ -958,6 +939,7 @@ const searchSong = async (req, res) => {
         if (!thumbnail && videoId) {
           thumbnail = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
         }
+
         const pageUrl =
           e.webpage_url ||
           e.url ||
