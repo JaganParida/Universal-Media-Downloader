@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 
 const API_BASE = "https://universal-media-downloader-9lff.onrender.com";
 
@@ -2601,7 +2601,7 @@ export default function Home() {
               <div className="mt-4 sm:mt-6 space-y-3 sm:space-y-4 text-xs sm:text-sm text-[#aaaaaa] leading-relaxed">
                 <p>
                   I am a 3rd-year Computer Science & Engineering student at
-                  Centurion University (Class of '27), dedicated to bridging the
+                  Centurion University (Class of &apos;27), dedicated to bridging the
                   gap between robust engineering logic and immersive user
                   experiences.
                 </p>
