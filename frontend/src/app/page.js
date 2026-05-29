@@ -3,266 +3,76 @@ import { useState, useRef, useEffect } from "react";
 
 const API_BASE = "https://universal-media-downloader-9lff.onrender.com";
 
-// ─── Utility ──────────────────────────────────────────────────────────────────
-const formatDuration = (secs) => {
-  if (!secs) return "0:00";
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = Math.floor(secs % 60);
-  if (h > 0)
-    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
-};
-
-const formatViews = (n) => {
-  if (!n) return "";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M views`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K views`;
-  return `${n} views`;
-};
-
-// ─── Sanitize format_id before sending to backend ─────────────────────────────
-const sanitizeFormatId = (id) => {
-  if (!id) return "auto";
-  if (
-    id === "best" ||
-    id === "undefined" ||
-    id === "bestaudio" ||
-    id === "auto"
-  )
-    return "auto";
-  if (/[/+[\]()]/.test(id)) return "auto";
-  return id;
-};
-
-// ─── Proxy thumbnail URL through backend ─────────────────────────────────────
-const proxyThumbnail = (url) => {
-  if (!url) return null;
-  if (url.includes("i.ytimg.com") || url.includes("img.youtube.com"))
-    return url;
-  if (
-    url.includes("cdninstagram.com") ||
-    url.includes("fbcdn.net") ||
-    url.includes("fbsbx.com") ||
-    url.includes("instagram.com")
-  ) {
-    return `${API_BASE}/api/thumbnail?url=${encodeURIComponent(url)}`;
-  }
-  return url;
-};
-
-// ─── WhatsApp Share ───────────────────────────────────────────────────────────
-const shareOnWhatsApp = (text) => {
-  const encoded = encodeURIComponent(text);
-  window.open(
-    `https://wa.me/?text=${encoded}`,
-    "_blank",
-    "noopener,noreferrer",
-  );
-};
-
-// ─── Copy to Clipboard ────────────────────────────────────────────────────────
-const copyToClipboard = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-// ─── Main Component ───────────────────────────────────────────────────────────
 export default function Home() {
-  const [activeTab, setActiveTab] = useState("video");
-
-  // ── Video Tab ────────────────────────────────────────────────────────────────
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [videoData, setVideoData] = useState(null);
   const [error, setError] = useState("");
+
   const [selectedFormatObj, setSelectedFormatObj] = useState(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [dropdownDirection, setDropdownDirection] = useState("down");
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [imgError, setImgError] = useState(false);
+
+  // New State to prevent duplicate fetches
   const [fetchedUrl, setFetchedUrl] = useState("");
+
+  // Search Extraction Timer State
   const [searchTimer, setSearchTimer] = useState(0);
 
-  // ── Share & Copy ─────────────────────────────────────────────────────────────
-  const [copySuccess, setCopySuccess] = useState(false);
-  const [shareMenuOpen, setShareMenuOpen] = useState(false);
-  const [audioShareMenuOpen, setAudioShareMenuOpen] = useState(false);
-
-  // ── Audio Tab ────────────────────────────────────────────────────────────────
-  const [audioTab, setAudioTab] = useState("reel");
-
-  const [reelUrl, setReelUrl] = useState("");
-  const [reelLoading, setReelLoading] = useState(false);
-  const [reelData, setReelData] = useState(null);
-  const [reelError, setReelError] = useState("");
-  const [reelFetchedUrl, setReelFetchedUrl] = useState("");
-  const [reelSearchTimer, setReelSearchTimer] = useState(0);
-  const [selectedAudioFormat, setSelectedAudioFormat] = useState(null);
-  const [isAudioDropdownOpen, setIsAudioDropdownOpen] = useState(false);
-  const [isAudioDownloading, setIsAudioDownloading] = useState(false);
-  const [audioDownloadProgress, setAudioDownloadProgress] = useState(0);
-  const [reelImgError, setReelImgError] = useState(false);
-
-  const [trimEnabled, setTrimEnabled] = useState(false);
-  const [trimStart, setTrimStart] = useState(0);
-  const [trimEnd, setTrimEnd] = useState(30);
-  const trimDuration = reelData?.duration || 0;
-
-  // ── Song Search ──────────────────────────────────────────────────────────────
-  const [songQuery, setSongQuery] = useState("");
-  const [songSearchLoading, setSongSearchLoading] = useState(false);
-  const [songResults, setSongResults] = useState([]);
-  const [songError, setSongError] = useState("");
-  const [downloadingId, setDownloadingId] = useState(null);
-  const [downloadedIds, setDownloadedIds] = useState(new Set());
-  const [songDownloadProgress, setSongDownloadProgress] = useState({});
-
-  // ── Download History ─────────────────────────────────────────────────────────
-  const [downloadHistory, setDownloadHistory] = useState([]);
-  const [showHistory, setShowHistory] = useState(false);
-
-  // ── Paste Loading ─────────────────────────────────────────────────────────────
-  const [pasteLoading, setPasteLoading] = useState(false);
-  const [reelPasteLoading, setReelPasteLoading] = useState(false);
-
-  // ── Modals ────────────────────────────────────────────────────────────────────
+  // Modals State
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+
+  // Feedback Form State
   const [feedbackType, setFeedbackType] = useState("Bug Report");
   const [feedbackMessage, setFeedbackMessage] = useState("");
 
   const dropdownContainerRef = useRef(null);
   const dropdownButtonRef = useRef(null);
-  const audioDropdownRef = useRef(null);
-  const shareMenuRef = useRef(null);
-  const audioShareMenuRef = useRef(null);
 
-  // ── History from localStorage ─────────────────────────────────────────────────
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("mediapro_history");
-      if (stored) setDownloadHistory(JSON.parse(stored));
-    } catch (_) {}
-  }, []);
-
-  const addToHistory = (item) => {
-    setDownloadHistory((prev) => {
-      const updated = [
-        { ...item, timestamp: Date.now() },
-        ...prev.filter((h) => h.url !== item.url),
-      ].slice(0, 20);
-      try {
-        localStorage.setItem("mediapro_history", JSON.stringify(updated));
-      } catch (_) {}
-      return updated;
-    });
-  };
-
-  const clearHistory = () => {
-    setDownloadHistory([]);
-    try {
-      localStorage.removeItem("mediapro_history");
-    } catch (_) {}
-  };
-
-  // ── Timers ────────────────────────────────────────────────────────────────────
+  // Live Timer Logic for Search/Extraction Phase
   useEffect(() => {
     let interval;
     if (isLoading) {
-      interval = setInterval(() => setSearchTimer((p) => p + 1), 1000);
+      interval = setInterval(() => {
+        setSearchTimer((prev) => prev + 1);
+      }, 1000);
     } else {
-      setSearchTimer(0);
+      setSearchTimer(0); // Reset timer when loading stops
     }
     return () => clearInterval(interval);
   }, [isLoading]);
 
   useEffect(() => {
-    let interval;
-    if (reelLoading) {
-      interval = setInterval(() => setReelSearchTimer((p) => p + 1), 1000);
-    } else {
-      setReelSearchTimer(0);
-    }
-    return () => clearInterval(interval);
-  }, [reelLoading]);
-
-  // ── Outside Click ──────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const handler = (e) => {
+    const handleClickOutside = (event) => {
       if (
         dropdownContainerRef.current &&
-        !dropdownContainerRef.current.contains(e.target)
-      )
+        !dropdownContainerRef.current.contains(event.target)
+      ) {
         setIsDropdownOpen(false);
-      if (
-        audioDropdownRef.current &&
-        !audioDropdownRef.current.contains(e.target)
-      )
-        setIsAudioDropdownOpen(false);
-      if (shareMenuRef.current && !shareMenuRef.current.contains(e.target))
-        setShareMenuOpen(false);
-      if (
-        audioShareMenuRef.current &&
-        !audioShareMenuRef.current.contains(e.target)
-      )
-        setAudioShareMenuOpen(false);
+      }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Prevent background scrolling when any modal is open
   useEffect(() => {
-    document.body.style.overflow =
-      isProfileOpen || isFeedbackOpen || showHistory ? "hidden" : "unset";
-  }, [isProfileOpen, isFeedbackOpen, showHistory]);
-
-  useEffect(() => {
-    if (trimDuration > 0) {
-      setTrimStart(0);
-      setTrimEnd(Math.min(30, trimDuration));
+    if (isProfileOpen || isFeedbackOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "unset";
     }
-  }, [trimDuration]);
+  }, [isProfileOpen, isFeedbackOpen]);
 
-  // ── Clipboard Paste ───────────────────────────────────────────────────────────
-  const handlePasteFromClipboard = async (setter) => {
-    setPasteLoading(true);
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text && (text.startsWith("http://") || text.startsWith("https://")))
-        setter(text);
-    } catch (_) {
-    } finally {
-      setPasteLoading(false);
-    }
-  };
-
-  const handleReelPasteFromClipboard = async () => {
-    setReelPasteLoading(true);
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text && (text.startsWith("http://") || text.startsWith("https://"))) {
-        setReelUrl(text);
-        setReelFetchedUrl("");
-      }
-    } catch (_) {
-    } finally {
-      setReelPasteLoading(false);
-    }
-  };
-
-  // ── Video helpers ──────────────────────────────────────────────────────────────
   const toggleDropdown = () => {
     if (!isDropdownOpen && dropdownButtonRef.current) {
       const rect = dropdownButtonRef.current.getBoundingClientRect();
-      setDropdownDirection(
-        window.innerHeight - rect.bottom < 280 ? "up" : "down",
-      );
+      const spaceBelow = window.innerHeight - rect.bottom;
+      setDropdownDirection(spaceBelow < 280 ? "up" : "down");
     }
     setIsDropdownOpen(!isDropdownOpen);
   };
@@ -315,8 +125,9 @@ export default function Home() {
         const newSize = f.filesize
           ? parseFloat(f.filesize.replace(/[^\d.]/g, ""))
           : 0;
-        if (newSize > existingSize || (!existing.filesize && f.filesize))
+        if (newSize > existingSize || (!existing.filesize && f.filesize)) {
           standardMap.set(stdRes, { ...f, stdRes, sortVal });
+        }
       }
     });
     return Array.from(standardMap.values()).sort(
@@ -325,7 +136,7 @@ export default function Home() {
   };
 
   const fetchMetadata = async (e) => {
-    if (e && e.preventDefault) e.preventDefault();
+    e.preventDefault();
     setIsLoading(true);
     setError("");
     setVideoData(null);
@@ -333,22 +144,28 @@ export default function Home() {
     setIsDownloading(false);
     setImgError(false);
     setIsDropdownOpen(false);
-    setShareMenuOpen(false);
+
     try {
       const response = await fetch(`${API_BASE}/api/info`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
       });
+
       const data = await response.json();
       if (!response.ok)
         throw new Error(data.error || "Could not analyze the link.");
+
       const perfectFormats = normalizeFormats(data.formats || []);
       setVideoData({ ...data, formats: perfectFormats });
+
       if (perfectFormats.length > 0) setSelectedFormatObj(perfectFormats[0]);
+
+      // Successfully fetched, so record this URL to prevent re-fetching
       setFetchedUrl(url);
     } catch (err) {
       setError(err.message);
+      // On error, clear fetchedUrl so user can retry the same link if needed
       setFetchedUrl("");
     } finally {
       setIsLoading(false);
@@ -357,31 +174,38 @@ export default function Home() {
 
   const handleDownload = async () => {
     if (!selectedFormatObj || !videoData) return;
+
     setIsDownloading(true);
     setDownloadProgress(0);
     setIsDropdownOpen(false);
 
-    const cleanFormatId = sanitizeFormatId(selectedFormatObj.format_id);
-    const downloadUrl = `${API_BASE}/api/download?url=${encodeURIComponent(url)}&format_id=${encodeURIComponent(cleanFormatId)}&title=${encodeURIComponent(videoData.title)}`;
+    const downloadUrl = `${API_BASE}/api/download?url=${encodeURIComponent(url)}&format_id=${selectedFormatObj.format_id}&title=${encodeURIComponent(videoData.title)}`;
+
     try {
       const response = await fetch(downloadUrl);
       if (!response.ok) {
         const errText = await response.text();
         throw new Error(errText || "Download failed at server.");
       }
+
       const contentLength = response.headers.get("Content-Length");
       const total = parseInt(contentLength, 10);
       let loaded = 0;
       const reader = response.body.getReader();
       const chunks = [];
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(value);
         loaded += value.length;
-        if (total) setDownloadProgress(Math.round((loaded / total) * 100));
-        else setDownloadProgress((prev) => Math.min(prev + 5, 95));
+        if (total) {
+          setDownloadProgress(Math.round((loaded / total) * 100));
+        } else {
+          setDownloadProgress((prev) => Math.min(prev + 5, 95));
+        }
       }
+
       const blob = new Blob(chunks, { type: "video/mp4" });
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -391,24 +215,34 @@ export default function Home() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
+
       setDownloadProgress(100);
-      addToHistory({
-        type: "video",
-        title: videoData.title,
-        thumbnail: videoData.thumbnail,
-        url,
-        quality: selectedFormatObj.stdRes || selectedFormatObj.resolution,
-        platform: videoData.platform,
-      });
       setTimeout(() => {
         setIsDownloading(false);
         setDownloadProgress(0);
       }, 3000);
     } catch (err) {
+      console.error("Download Error:", err);
       setError(err.message || "Download failed");
       setIsDownloading(false);
       setDownloadProgress(0);
     }
+  };
+
+  // Feedback Submission Handler via mailto
+  const handleFeedbackSubmit = (e) => {
+    e.preventDefault();
+    if (!feedbackMessage.trim()) return;
+
+    const userAgent = navigator.userAgent;
+    const bodyText = `${feedbackMessage}\n\n------------------------\nUser Diagnostics (Do Not Edit):\nSystem: ${userAgent}\nTime: ${new Date().toLocaleString()}`;
+
+    const subject = encodeURIComponent(`[Media Pro] ${feedbackType}`);
+    const body = encodeURIComponent(bodyText);
+
+    window.location.href = `mailto:jaganparida39064@gmail.com?subject=${subject}&body=${body}`;
+    setIsFeedbackOpen(false);
+    setFeedbackMessage("");
   };
 
   const renderQualityLabel = (format) => {
@@ -432,7 +266,11 @@ export default function Home() {
         </span>
       );
     }
-    const isHD = ["1080p", "720p", "1440p", "4K"].includes(format.stdRes);
+    const isHD =
+      format.stdRes === "1080p" ||
+      format.stdRes === "720p" ||
+      format.stdRes === "1440p" ||
+      format.stdRes === "4K";
     return (
       <span className="flex items-center gap-2 text-[#f1f1f1]">
         {format.stdRes}
@@ -452,433 +290,26 @@ export default function Home() {
     url.toLowerCase().includes("youtube.com") ||
     url.toLowerCase().includes("youtu.be");
 
-  // ── Share helpers ──────────────────────────────────────────────────────────────
-  const handleShareVideo = async (platform) => {
-    const text = `🎬 Check out this video: ${videoData?.title}\n\nDownload it free on MediaPro 👇\n${url}`;
-    if (platform === "whatsapp") shareOnWhatsApp(text);
-    else if (platform === "copy") {
-      const ok = await copyToClipboard(url);
-      if (ok) {
-        setCopySuccess(true);
-        setTimeout(() => setCopySuccess(false), 2500);
-      }
-    } else if (platform === "native" && navigator.share) {
-      try {
-        await navigator.share({ title: videoData?.title, url });
-      } catch (_) {}
-    }
-    setShareMenuOpen(false);
-  };
-
-  const handleShareAudio = async (platform) => {
-    const text = `🎵 Listen to this: ${reelData?.title}\n\nExtract audio free on MediaPro 👇\n${reelUrl}`;
-    if (platform === "whatsapp") shareOnWhatsApp(text);
-    else if (platform === "copy") {
-      const ok = await copyToClipboard(reelUrl);
-      if (ok) {
-        setCopySuccess(true);
-        setTimeout(() => setCopySuccess(false), 2500);
-      }
-    } else if (platform === "native" && navigator.share) {
-      try {
-        await navigator.share({ title: reelData?.title, url: reelUrl });
-      } catch (_) {}
-    }
-    setAudioShareMenuOpen(false);
-  };
-
-  const handleShareSong = async (song, platform) => {
-    const text = `🎵 Download "${song.title}" for free on MediaPro!\n${song.url}`;
-    if (platform === "whatsapp") shareOnWhatsApp(text);
-    else if (platform === "copy") {
-      const ok = await copyToClipboard(song.url);
-      if (ok) {
-        setCopySuccess(true);
-        setTimeout(() => setCopySuccess(false), 2000);
-      }
-    }
-  };
-
-  // ── Audio helpers ──────────────────────────────────────────────────────────────
-  const fetchAudioInfo = async (e) => {
-    if (e && e.preventDefault) e.preventDefault();
-    if (!reelUrl.trim()) return;
-
-    if (/instagram\.com\/reels\/audio\//i.test(reelUrl)) {
-      setReelError(
-        "Instagram audio-page links (instagram.com/reels/audio/...) are not supported. Please paste the URL of an actual Reel or video post instead — e.g. instagram.com/reel/ABC123.",
-      );
-      return;
-    }
-
-    setReelLoading(true);
-    setReelError("");
-    setReelData(null);
-    setSelectedAudioFormat(null);
-    setIsAudioDropdownOpen(false);
-    setReelImgError(false);
-    setTrimEnabled(false);
-    setTrimStart(0);
-    setTrimEnd(30);
-    setAudioShareMenuOpen(false);
-
-    try {
-      const response = await fetch(`${API_BASE}/api/audio/info`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: reelUrl }),
-      });
-
-      const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        throw new Error(
-          `Server error (${response.status}). Please check your backend deployment.`,
-        );
-      }
-
-      const data = await response.json();
-      if (!response.ok)
-        throw new Error(data.error || "Could not extract audio info.");
-      setReelData(data);
-      if (data.audioFormats?.length > 0)
-        setSelectedAudioFormat(data.audioFormats[0]);
-      setReelFetchedUrl(reelUrl);
-    } catch (err) {
-      setReelError(err.message);
-      setReelFetchedUrl("");
-    } finally {
-      setReelLoading(false);
-    }
-  };
-
-  const handleAudioDownload = async () => {
-    if (!reelData) return;
-    setIsAudioDownloading(true);
-    setAudioDownloadProgress(0);
-
-    const cleanFormatId = sanitizeFormatId(selectedAudioFormat?.format_id);
-
-    const params = new URLSearchParams({
-      url: reelUrl,
-      format_id: cleanFormatId,
-      title: reelData.title || "audio",
-    });
-    if (trimEnabled && trimEnd > trimStart) {
-      params.set("startTime", String(trimStart));
-      params.set("endTime", String(trimEnd));
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/api/audio/download?${params}`);
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || "Audio download failed.");
-      }
-      const contentLength = response.headers.get("Content-Length");
-      const total = parseInt(contentLength, 10);
-      let loaded = 0;
-      const reader = response.body.getReader();
-      const chunks = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        loaded += value.length;
-        if (total) setAudioDownloadProgress(Math.round((loaded / total) * 100));
-        else setAudioDownloadProgress((p) => Math.min(p + 5, 95));
-      }
-      const blob = new Blob(chunks, { type: "audio/mpeg" });
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      const fname = trimEnabled
-        ? `${(reelData.title || "audio").replace(/[^\w\s-]/gi, "")}_ringtone.mp3`
-        : `${(reelData.title || "audio").replace(/[^\w\s-]/gi, "")}.mp3`;
-      a.download = fname;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-      setAudioDownloadProgress(100);
-      addToHistory({
-        type: "audio",
-        title: reelData.title,
-        thumbnail: reelData.thumbnail,
-        url: reelUrl,
-        quality: selectedAudioFormat?.quality || "Best",
-        platform: reelData.platform,
-      });
-      setTimeout(() => {
-        setIsAudioDownloading(false);
-        setAudioDownloadProgress(0);
-      }, 3000);
-    } catch (err) {
-      console.error("🔴 AUDIO DOWNLOAD CRASHED:", err);
-      setReelError(err.message || "Audio download failed");
-      setIsAudioDownloading(false);
-      setAudioDownloadProgress(0);
-    }
-  };
-
-  const handleSongSearch = async (e) => {
-    if (e && e.preventDefault) e.preventDefault();
-    if (!songQuery.trim()) return;
-    setSongSearchLoading(true);
-    setSongError("");
-    setSongResults([]);
-    try {
-      const response = await fetch(
-        `${API_BASE}/api/audio/search?query=${encodeURIComponent(songQuery.trim())}`,
-      );
-      const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        throw new Error(
-          `Server error (${response.status}). Please check your backend deployment.`,
-        );
-      }
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Search failed.");
-      setSongResults(data.results || []);
-      if ((data.results || []).length === 0)
-        setSongError("No results found. Try different keywords.");
-    } catch (err) {
-      setSongError(err.message || "Song search failed.");
-    } finally {
-      setSongSearchLoading(false);
-    }
-  };
-
-  const handleSongDownload = async (song) => {
-    if (downloadingId) return;
-    setDownloadingId(song.id);
-    setSongDownloadProgress((p) => ({ ...p, [song.id]: 0 }));
-
-    const params = new URLSearchParams({
-      url: song.url,
-      format_id: "auto",
-      title: song.title || "song",
-    });
-
-    try {
-      const response = await fetch(`${API_BASE}/api/audio/download?${params}`);
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || "Download failed.");
-      }
-      const contentLength = response.headers.get("Content-Length");
-      const total = parseInt(contentLength, 10);
-      let loaded = 0;
-      const reader = response.body.getReader();
-      const chunks = [];
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        loaded += value.length;
-        if (total)
-          setSongDownloadProgress((p) => ({
-            ...p,
-            [song.id]: Math.round((loaded / total) * 100),
-          }));
-        else
-          setSongDownloadProgress((p) => ({
-            ...p,
-            [song.id]: Math.min((p[song.id] || 0) + 5, 95),
-          }));
-      }
-      const blob = new Blob(chunks, { type: "audio/mpeg" });
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `${(song.title || "song").replace(/[^\w\s-]/gi, "")}.mp3`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-      setSongDownloadProgress((p) => ({ ...p, [song.id]: 100 }));
-      setDownloadedIds((s) => new Set([...s, song.id]));
-      addToHistory({
-        type: "song",
-        title: song.title,
-        thumbnail: song.thumbnail,
-        url: song.url,
-        quality: "MP3",
-        platform: "youtube",
-      });
-      setTimeout(() => {
-        setDownloadingId(null);
-        setSongDownloadProgress((p) => {
-          const next = { ...p };
-          delete next[song.id];
-          return next;
-        });
-      }, 2500);
-    } catch (err) {
-      setSongError(err.message || "Song download failed.");
-      setDownloadingId(null);
-      setSongDownloadProgress((p) => {
-        const next = { ...p };
-        delete next[song.id];
-        return next;
-      });
-    }
-  };
-
-  const handleFeedbackSubmit = (e) => {
-    e.preventDefault();
-    if (!feedbackMessage.trim()) return;
-    const userAgent = navigator.userAgent;
-    const bodyText = `${feedbackMessage}\n\n------------------------\nUser Diagnostics (Do Not Edit):\nSystem: ${userAgent}\nTime: ${new Date().toLocaleString()}`;
-    const subject = encodeURIComponent(`[Media Pro] ${feedbackType}`);
-    const body = encodeURIComponent(bodyText);
-    window.location.href = `mailto:jaganparida39064@gmail.com?subject=${subject}&body=${body}`;
-    setIsFeedbackOpen(false);
-    setFeedbackMessage("");
-  };
-
-  // ─── Share Dropdown Component ─────────────────────────────────────────────────
-  const ShareDropdown = ({ onShare, hasNativeShare, isOpen, menuRef }) => (
-    <div ref={menuRef} className="relative">
-      {isOpen && (
-        <div className="absolute right-0 bottom-full mb-2 z-20 bg-[#222222] border border-[#303030] rounded-xl shadow-2xl overflow-hidden min-w-[180px]">
-          <div className="px-3 py-2 border-b border-[#272727]">
-            <p className="text-[10px] text-[#717171] uppercase tracking-wider font-semibold">
-              Share via
-            </p>
-          </div>
-          <button
-            onClick={() => onShare("whatsapp")}
-            className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#303030] transition-colors text-left"
-          >
-            <span className="w-7 h-7 rounded-full bg-[#25D366]/15 flex items-center justify-center flex-shrink-0">
-              <svg
-                className="w-4 h-4 text-[#25D366]"
-                fill="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-              </svg>
-            </span>
-            <span className="text-sm text-[#f1f1f1] font-medium">WhatsApp</span>
-          </button>
-          <button
-            onClick={() => onShare("copy")}
-            className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#303030] transition-colors text-left"
-          >
-            <span className="w-7 h-7 rounded-full bg-[#3ea6ff]/15 flex items-center justify-center flex-shrink-0">
-              {copySuccess ? (
-                <svg
-                  className="w-4 h-4 text-green-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2.5"
-                    d="M5 13l4 4L19 7"
-                  />
-                </svg>
-              ) : (
-                <svg
-                  className="w-4 h-4 text-[#3ea6ff]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
-                  />
-                </svg>
-              )}
-            </span>
-            <span className="text-sm text-[#f1f1f1] font-medium">
-              {copySuccess ? "Copied!" : "Copy Link"}
-            </span>
-          </button>
-          {hasNativeShare && (
-            <button
-              onClick={() => onShare("native")}
-              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#303030] transition-colors text-left border-t border-[#272727]"
-            >
-              <span className="w-7 h-7 rounded-full bg-[#a855f7]/15 flex items-center justify-center flex-shrink-0">
-                <svg
-                  className="w-4 h-4 text-[#a855f7]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
-                  />
-                </svg>
-              </span>
-              <span className="text-sm text-[#f1f1f1] font-medium">
-                More Options
-              </span>
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-
-  // ─── RENDER ───────────────────────────────────────────────────────────────────
   return (
-    <div
-      suppressHydrationWarning
-      className="min-h-screen bg-[#0f0f0f] text-[#f1f1f1] font-sans flex flex-col selection:bg-[#9333ea] selection:text-white relative"
-    >
-      {/* HEADER */}
-      <header className="sticky top-0 z-40 w-full bg-[#0f0f0f]/95 backdrop-blur-md px-3 sm:px-6 py-3 sm:py-3.5 flex items-center justify-between shadow-sm border-b border-[#272727]">
+    <div className="min-h-screen bg-[#0f0f0f] text-[#f1f1f1] font-sans flex flex-col selection:bg-[#9333ea] selection:text-white relative">
+      {/* ─── YOUTUBE STYLE STICKY HEADER ─── */}
+      <header className="sticky top-0 z-40 w-full bg-[#0f0f0f]/95 backdrop-blur-md px-4 sm:px-6 py-3.5 flex items-center justify-between shadow-sm border-b border-[#272727]">
         <div className="flex items-center cursor-pointer">
-          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center mr-2 sm:mr-2.5 flex-shrink-0">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center mr-2.5">
             <img
               src="/icon.svg"
               alt="Media Pro Logo"
               className="w-full h-full object-contain"
             />
           </div>
-          <h1 className="text-lg sm:text-xl font-bold tracking-tight">
+          <h1 className="text-xl font-bold tracking-tight">
             Media<span className="font-light text-[#aaaaaa]">Pro</span>
           </h1>
         </div>
-        <div className="flex items-center gap-2 sm:gap-4">
-          <button
-            onClick={() => setShowHistory(true)}
-            className="relative flex items-center gap-1 sm:gap-1.5 text-sm font-medium text-[#aaaaaa] hover:text-[#f1f1f1] transition-colors p-1.5 sm:p-0"
-            title="Download History"
-          >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            <span className="hidden sm:inline">History</span>
-            {downloadHistory.length > 0 && (
-              <span className="absolute -top-1 -right-1 sm:static sm:ml-1 w-4 h-4 sm:w-auto sm:h-auto bg-[#a855f7] text-white text-[9px] sm:text-[10px] sm:px-1.5 sm:py-0.5 rounded-full flex items-center justify-center font-bold">
-                {downloadHistory.length > 9 ? "9+" : downloadHistory.length}
-              </span>
-            )}
-          </button>
+        <div className="flex items-center gap-4">
           <button
             onClick={() => setIsFeedbackOpen(true)}
-            className="flex items-center gap-1 sm:gap-1.5 text-sm font-medium text-[#aaaaaa] hover:text-[#f1f1f1] transition-colors p-1.5 sm:p-0"
+            className="flex items-center gap-1.5 text-sm font-medium text-[#aaaaaa] hover:text-[#f1f1f1] transition-colors"
           >
             <svg
               className="w-4 h-4"
@@ -897,10 +328,10 @@ export default function Home() {
           </button>
           <button
             onClick={() => setIsProfileOpen(true)}
-            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full overflow-hidden border border-[#3f3f3f] hover:border-[#717171] transition-colors bg-[#1e1e1e] flex items-center justify-center flex-shrink-0"
+            className="w-8 h-8 rounded-full overflow-hidden border border-[#3f3f3f] hover:border-[#717171] transition-colors bg-[#1e1e1e] flex items-center justify-center"
           >
             <svg
-              className="w-5 h-5 sm:w-6 sm:h-6 text-[#717171]"
+              className="w-6 h-6 text-[#717171]"
               viewBox="0 0 24 24"
               fill="currentColor"
             >
@@ -914,523 +345,30 @@ export default function Home() {
         </div>
       </header>
 
-      {/* MAIN */}
-      <main className="flex-grow flex flex-col items-center p-3 sm:p-6 mt-3 sm:mt-12">
-        <div className="w-full max-w-3xl space-y-5 sm:space-y-8">
-          {/* Hero */}
-          <div className="text-center space-y-2 sm:space-y-3 px-2">
-            <h2 className="text-2xl sm:text-4xl font-bold tracking-tight leading-tight">
+      {/* ─── MAIN CONTENT ─── */}
+      <main className="flex-grow flex flex-col items-center p-4 sm:p-6 mt-4 sm:mt-12">
+        <div className="w-full max-w-3xl space-y-10">
+          {/* Hero Section */}
+          <div className="text-center space-y-3 px-2">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight leading-tight">
               Download Media <br className="sm:hidden" /> Anywhere
             </h2>
-            <p className="text-[#aaaaaa] text-xs sm:text-base max-w-md mx-auto leading-relaxed">
+            <p className="text-[#aaaaaa] text-sm sm:text-base max-w-md mx-auto">
               Paste a public URL from YouTube, Instagram, or Facebook to
               download pristine, high-definition media directly to your device.
             </p>
           </div>
 
-          {/* Tab Switcher */}
-          <div className="flex gap-1 p-1 bg-[#181818] border border-[#272727] rounded-2xl w-fit mx-auto">
-            <button
-              onClick={() => setActiveTab("video")}
-              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 ${activeTab === "video" ? "bg-[#f1f1f1] text-[#0f0f0f] shadow-md" : "text-[#aaaaaa] hover:text-[#f1f1f1]"}`}
+          {/* YouTube Premium Style Input Area */}
+          <div className="space-y-3">
+            <form
+              onSubmit={fetchMetadata}
+              className="relative flex flex-col sm:flex-row shadow-lg"
             >
-              <svg
-                className="w-3.5 h-3.5 sm:w-4 sm:h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
-                />
-              </svg>
-              Video Download
-            </button>
-            <button
-              onClick={() => setActiveTab("audio")}
-              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 ${activeTab === "audio" ? "bg-[#f1f1f1] text-[#0f0f0f] shadow-md" : "text-[#aaaaaa] hover:text-[#f1f1f1]"}`}
-            >
-              <svg
-                className="w-3.5 h-3.5 sm:w-4 sm:h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
-                />
-              </svg>
-              Audio & Music
-              <span className="text-[9px] sm:text-[10px] font-bold bg-[#a855f7] text-white px-1 sm:px-1.5 py-0.5 rounded-sm uppercase tracking-wider">
-                NEW
-              </span>
-            </button>
-          </div>
-
-          {/* ══ VIDEO TAB ══ */}
-          {activeTab === "video" && (
-            <div className="space-y-4 sm:space-y-6">
-              <div className="space-y-2 sm:space-y-3">
-                <form
-                  onSubmit={fetchMetadata}
-                  className="relative flex flex-col sm:flex-row shadow-lg gap-2 sm:gap-0"
-                >
-                  <div className="relative flex-1 flex">
-                    <div className="absolute inset-y-0 left-0 pl-3 sm:pl-4 flex items-center pointer-events-none">
-                      <svg
-                        className="h-4 w-4 sm:h-5 sm:w-5 text-[#717171]"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                        />
-                      </svg>
-                    </div>
-                    <input
-                      type="text"
-                      className="w-full pl-10 sm:pl-12 pr-20 sm:pr-14 py-3 sm:py-3.5 bg-[#121212] border border-[#303030] sm:rounded-l-full sm:rounded-r-none rounded-full focus:outline-none focus:border-[#3ea6ff] focus:bg-[#0f0f0f] transition-all text-sm sm:text-base placeholder-[#717171]"
-                      placeholder="Paste video URL..."
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handlePasteFromClipboard(setUrl)}
-                      className="absolute inset-y-0 right-2 flex items-center px-2 text-[#717171] hover:text-[#a855f7] transition-colors"
-                      title="Paste from clipboard"
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isLoading || !url || url === fetchedUrl}
-                    className="px-6 sm:px-8 py-3 sm:py-3.5 bg-[#222222] border border-[#303030] sm:border-l-0 hover:bg-[#303030] text-[#f1f1f1] font-medium sm:rounded-r-full sm:rounded-l-none rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-sm sm:text-base"
-                  >
-                    {isLoading ? (
-                      <svg
-                        className="animate-spin h-4 w-4 sm:h-5 sm:w-5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        ></circle>
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                      </svg>
-                    ) : url === fetchedUrl && videoData ? (
-                      <>
-                        <svg
-                          className="w-4 h-4 sm:w-5 sm:h-5 text-green-500"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2"
-                            d="M5 13l4 4L19 7"
-                          ></path>
-                        </svg>
-                        Ready
-                      </>
-                    ) : (
-                      "Search"
-                    )}
-                  </button>
-                </form>
-
-                <div className="px-2 sm:px-3 min-h-[40px] sm:min-h-[48px] flex items-start">
-                  {isLoading ? (
-                    <div className="text-xs text-[#aaaaaa] flex items-start gap-2 animate-in fade-in duration-300">
-                      <svg
-                        className="w-4 h-4 sm:w-5 sm:h-5 text-[#a855f7] animate-spin flex-shrink-0 mt-0.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        ></circle>
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                      </svg>
-                      <span>
-                        <strong className="text-[#f1f1f1] text-xs sm:text-sm">
-                          Extracting media details...{" "}
-                          <span className="text-[#a855f7]">
-                            ({searchTimer}s)
-                          </span>
-                        </strong>
-                        <br />
-                        <span className="opacity-80 text-[11px] sm:text-xs">
-                          This process usually takes 10–30 seconds. Please be
-                          patient.
-                        </span>
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-1 sm:gap-1.5 w-full">
-                      {isFacebook && (
-                        <p className="text-xs text-[#aaaaaa] flex items-center gap-1.5 animate-in fade-in duration-300">
-                          <svg
-                            className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#a855f7] flex-shrink-0"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                            />
-                          </svg>
-                          <span>
-                            <strong>Note:</strong> Facebook videos will only
-                            contain audio if the music is strictly public.
-                          </span>
-                        </p>
-                      )}
-                      {isYouTube && (
-                        <p className="text-xs text-[#aaaaaa] flex items-center gap-1.5 animate-in fade-in duration-300">
-                          <svg
-                            className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#ff4e4e] flex-shrink-0"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                            />
-                          </svg>
-                          <span>
-                            <strong>Requirement:</strong> Ensure the YouTube
-                            video is fully public.
-                          </span>
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {error && (
-                <div className="p-3 sm:p-4 bg-[#ff0000]/10 border border-[#ff0000]/30 text-[#ff4e4e] rounded-xl flex items-start gap-2 sm:gap-3">
+              <div className="relative flex-1 flex">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <svg
-                    className="w-4 h-4 sm:w-5 sm:h-5 mt-0.5 flex-shrink-0"
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  <p className="text-xs sm:text-sm font-medium">{error}</p>
-                </div>
-              )}
-
-              {videoData && (
-                <div className="bg-[#181818] border border-[#272727] rounded-2xl overflow-hidden shadow-2xl transition-all animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="relative aspect-video bg-black group overflow-hidden border-b border-[#272727]">
-                    {videoData.thumbnail && !imgError ? (
-                      <img
-                        src={proxyThumbnail(videoData.thumbnail)}
-                        alt={videoData.title}
-                        onError={() => setImgError(true)}
-                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 absolute inset-0"
-                        crossOrigin="anonymous"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center justify-center w-full h-full text-[#555555] bg-[#121212] absolute inset-0">
-                        <svg
-                          className="w-12 h-12 sm:w-16 sm:h-16 mb-3 opacity-40"
-                          fill="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path d="M21 3H3C2.44772 3 2 3.44772 2 4V20C2 20.5523 2.44772 21 3 21H21C21.5523 21 22 20.5523 22 20V4C22 3.44772 21.5523 3 21 3ZM20 19H4V5H20V19ZM15.5 10.5C15.5 11.3284 14.8284 12 14 12C13.1716 12 12.5 11.3284 12.5 10.5C12.5 9.67157 13.1716 9 14 9C14.8284 9 15.5 9.67157 15.5 10.5ZM8.5 15.5L11.5 11.5L14 14.5L17 10L19 15.5H5L8.5 15.5Z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-medium tracking-wide">
-                          Media preview unavailable
-                        </span>
-                      </div>
-                    )}
-                    <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
-                      <div className="w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-br from-[#8b5cf6] to-[#a855f7] rounded-full flex items-center justify-center shadow-lg">
-                        <svg
-                          className="w-6 h-6 sm:w-8 sm:h-8 text-white ml-1"
-                          fill="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path d="M8 5v14l11-7z" />
-                        </svg>
-                      </div>
-                    </div>
-                    {videoData.duration > 0 && (
-                      <div className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 bg-black/70 text-white text-[10px] sm:text-xs font-bold px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md">
-                        {formatDuration(videoData.duration)}
-                      </div>
-                    )}
-                  </div>
-                  <div className="p-4 sm:p-7 space-y-4 sm:space-y-6">
-                    <div>
-                      <h2 className="text-base sm:text-xl font-semibold line-clamp-2 text-[#f1f1f1] leading-snug">
-                        {videoData.title}
-                      </h2>
-                      {videoData.description && (
-                        <p className="text-xs sm:text-sm text-[#aaaaaa] mt-1.5 sm:mt-2 line-clamp-2">
-                          {videoData.description}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-2 sm:gap-3 pt-3 sm:pt-4 border-t border-[#272727]">
-                      <div
-                        className="relative w-full"
-                        ref={dropdownContainerRef}
-                      >
-                        <button
-                          ref={dropdownButtonRef}
-                          onClick={toggleDropdown}
-                          className="w-full flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 bg-[#222222] hover:bg-[#303030] border border-[#303030] rounded-xl transition-colors focus:outline-none text-sm sm:text-base"
-                        >
-                          {selectedFormatObj ? (
-                            renderQualityLabel(selectedFormatObj)
-                          ) : (
-                            <span className="text-[#f1f1f1]">
-                              Select Quality
-                            </span>
-                          )}
-                          <svg
-                            className={`w-4 h-4 text-[#aaaaaa] transition-transform flex-shrink-0 ml-2 ${isDropdownOpen ? "rotate-180" : ""}`}
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M19 9l-7 7-7-7"
-                            />
-                          </svg>
-                        </button>
-                        {isDropdownOpen && (
-                          <div
-                            className={`absolute z-10 w-full bg-[#222222] border border-[#303030] shadow-2xl rounded-xl overflow-hidden py-2 ${dropdownDirection === "up" ? "bottom-full mb-2" : "top-full mt-2"}`}
-                          >
-                            <div className="max-h-52 sm:max-h-60 overflow-y-auto custom-scrollbar">
-                              {videoData.formats.map((format, idx) => {
-                                const isSelected =
-                                  selectedFormatObj?.format_id ===
-                                  format.format_id;
-                                return (
-                                  <button
-                                    key={idx}
-                                    onClick={() => {
-                                      setSelectedFormatObj(format);
-                                      setIsDropdownOpen(false);
-                                    }}
-                                    className={`w-full flex items-center justify-between px-4 sm:px-5 py-2.5 sm:py-3 text-left transition-colors text-sm sm:text-base ${isSelected ? "bg-[#333333] border-l-2 border-[#f1f1f1]" : "hover:bg-[#303030] border-l-2 border-transparent"}`}
-                                  >
-                                    <div className="flex items-center gap-2 sm:gap-3">
-                                      {isSelected && (
-                                        <svg
-                                          className="w-4 h-4 text-[#f1f1f1]"
-                                          fill="none"
-                                          stroke="currentColor"
-                                          viewBox="0 0 24 24"
-                                        >
-                                          <path
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            strokeWidth="3"
-                                            d="M5 13l4 4L19 7"
-                                          />
-                                        </svg>
-                                      )}
-                                      {renderQualityLabel(format)}
-                                    </div>
-                                    {format.filesize && (
-                                      <span className="text-[10px] sm:text-xs font-medium text-[#aaaaaa]">
-                                        {format.filesize}
-                                      </span>
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleDownload}
-                          disabled={isDownloading || !selectedFormatObj}
-                          className="relative overflow-hidden flex-1 px-4 sm:px-5 py-3 sm:py-3.5 bg-[#f1f1f1] hover:bg-[#d9d9d9] text-[#0f0f0f] font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
-                        >
-                          {isDownloading && downloadProgress < 100 && (
-                            <div
-                              className="absolute left-0 top-0 bottom-0 bg-black/10 transition-all duration-300 z-0"
-                              style={{ width: `${downloadProgress}%` }}
-                            />
-                          )}
-                          <span className="relative z-10 flex items-center justify-center gap-2">
-                            {isDownloading ? (
-                              downloadProgress === 100 ? (
-                                <>
-                                  <svg
-                                    className="w-4 h-4 text-green-600"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth="2"
-                                      d="M5 13l4 4L19 7"
-                                    ></path>
-                                  </svg>
-                                  Done!
-                                </>
-                              ) : (
-                                `${downloadProgress}%`
-                              )
-                            ) : (
-                              <>
-                                <svg
-                                  className="w-4 h-4 sm:w-5 sm:h-5"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth="2"
-                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                                  ></path>
-                                </svg>
-                                Download
-                              </>
-                            )}
-                          </span>
-                        </button>
-                        <div className="relative" ref={shareMenuRef}>
-                          <button
-                            onClick={() => setShareMenuOpen(!shareMenuOpen)}
-                            className="h-full px-3 sm:px-4 py-3 sm:py-3.5 bg-[#222222] hover:bg-[#303030] border border-[#303030] rounded-xl transition-colors flex items-center gap-1.5"
-                            title="Share"
-                          >
-                            <svg
-                              className="w-4 h-4 text-[#aaaaaa]"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth="2"
-                                d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
-                              />
-                            </svg>
-                            <span className="hidden sm:inline text-sm text-[#aaaaaa]">
-                              Share
-                            </span>
-                          </button>
-                          <ShareDropdown
-                            isOpen={shareMenuOpen}
-                            onShare={handleShareVideo}
-                            hasNativeShare={
-                              typeof navigator !== "undefined" &&
-                              !!navigator.share
-                            }
-                            menuRef={shareMenuRef}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ══ AUDIO TAB ══ */}
-          {activeTab === "audio" && (
-            <div className="space-y-4 sm:space-y-6">
-              <div className="flex gap-1 p-1 bg-[#181818] border border-[#272727] rounded-xl w-full">
-                <button
-                  onClick={() => setAudioTab("reel")}
-                  className={`flex-1 flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${audioTab === "reel" ? "bg-[#222222] text-[#f1f1f1] border border-[#3a3a3a]" : "text-[#717171] hover:text-[#aaaaaa]"}`}
-                >
-                  <svg
-                    className="w-3.5 h-3.5 sm:w-4 sm:h-4 flex-shrink-0"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-                    />
-                  </svg>
-                  <span className="leading-none">Extract from Reel</span>
-                </button>
-                <button
-                  onClick={() => setAudioTab("search")}
-                  className={`flex-1 flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${audioTab === "search" ? "bg-[#222222] text-[#f1f1f1] border border-[#3a3a3a]" : "text-[#717171] hover:text-[#aaaaaa]"}`}
-                >
-                  <svg
-                    className="w-3.5 h-3.5 sm:w-4 sm:h-4 flex-shrink-0"
+                    className="h-5 w-5 text-[#717171]"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -1442,268 +380,313 @@ export default function Home() {
                       d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
                     />
                   </svg>
-                  <span className="leading-none">Search Song</span>
-                </button>
+                </div>
+                <input
+                  type="text"
+                  className="w-full pl-12 pr-4 py-3.5 bg-[#121212] border border-[#303030] sm:rounded-l-full sm:rounded-r-none rounded-full focus:outline-none focus:border-[#3ea6ff] focus:bg-[#0f0f0f] transition-all text-base placeholder-[#717171]"
+                  placeholder="Paste video or shorts URL..."
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                />
               </div>
-
-              {/* REEL AUDIO EXTRACTION */}
-              {audioTab === "reel" && (
-                <div className="space-y-4 sm:space-y-5">
-                  <form
-                    onSubmit={fetchAudioInfo}
-                    className="relative flex flex-col sm:flex-row shadow-lg gap-2 sm:gap-0"
+              <button
+                type="submit"
+                // Disabled if loading, empty url, OR if the url is already successfully fetched
+                disabled={isLoading || !url || url === fetchedUrl}
+                className="mt-3 sm:mt-0 px-8 py-3.5 bg-[#222222] border border-[#303030] sm:border-l-0 hover:bg-[#303030] text-[#f1f1f1] font-medium sm:rounded-r-full sm:rounded-l-none rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+              >
+                {isLoading ? (
+                  <svg
+                    className="animate-spin h-5 w-5 text-[#f1f1f1]"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
                   >
-                    <div className="relative flex-1 flex">
-                      <div className="absolute inset-y-0 left-0 pl-3 sm:pl-4 flex items-center pointer-events-none">
-                        <svg
-                          className="h-4 w-4 sm:h-5 sm:w-5 text-[#a855f7]"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2"
-                            d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
-                          />
-                        </svg>
-                      </div>
-                      <input
-                        type="text"
-                        className="w-full pl-10 sm:pl-12 pr-16 sm:pr-14 py-3 sm:py-3.5 bg-[#121212] border border-[#303030] sm:rounded-l-full sm:rounded-r-none rounded-full focus:outline-none focus:border-[#a855f7] focus:bg-[#0f0f0f] transition-all text-sm sm:text-base placeholder-[#717171]"
-                        placeholder="Paste Instagram Reel, YouTube, or Facebook URL..."
-                        value={reelUrl}
-                        onChange={(e) => {
-                          setReelUrl(e.target.value);
-                          if (e.target.value !== reelFetchedUrl)
-                            setReelFetchedUrl("");
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleReelPasteFromClipboard}
-                        className="absolute inset-y-0 right-2 flex items-center px-2 text-[#717171] hover:text-[#a855f7] transition-colors"
-                        title="Paste from clipboard"
-                      >
-                        {reelPasteLoading ? (
-                          <svg
-                            className="w-4 h-4 animate-spin"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                          >
-                            <circle
-                              className="opacity-25"
-                              cx="12"
-                              cy="12"
-                              r="10"
-                              stroke="currentColor"
-                              strokeWidth="4"
-                            ></circle>
-                            <path
-                              className="opacity-75"
-                              fill="currentColor"
-                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                            ></path>
-                          </svg>
-                        ) : (
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-                            />
-                          </svg>
-                        )}
-                      </button>
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={
-                        reelLoading || !reelUrl || reelUrl === reelFetchedUrl
-                      }
-                      className="px-6 sm:px-8 py-3 sm:py-3.5 bg-[#222222] border border-[#303030] sm:border-l-0 hover:bg-[#303030] text-[#f1f1f1] font-medium sm:rounded-r-full sm:rounded-l-none rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-sm sm:text-base"
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                ) : url === fetchedUrl && videoData ? (
+                  <>
+                    <svg
+                      className="w-5 h-5 text-green-500"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
                     >
-                      {reelLoading ? (
-                        <svg
-                          className="animate-spin h-4 w-4 sm:h-5 sm:w-5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                        >
-                          <circle
-                            className="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            strokeWidth="4"
-                          ></circle>
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                          ></path>
-                        </svg>
-                      ) : reelUrl === reelFetchedUrl && reelData ? (
-                        <>
-                          <svg
-                            className="w-4 h-4 sm:w-5 sm:h-5 text-green-500"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2"
-                              d="M5 13l4 4L19 7"
-                            ></path>
-                          </svg>
-                          Ready
-                        </>
-                      ) : (
-                        "Extract"
-                      )}
-                    </button>
-                  </form>
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M5 13l4 4L19 7"
+                      ></path>
+                    </svg>
+                    Ready
+                  </>
+                ) : (
+                  "Search"
+                )}
+              </button>
+            </form>
 
-                  {reelLoading && (
-                    <div className="px-2 sm:px-3 text-xs text-[#aaaaaa] flex items-start gap-2 animate-in fade-in duration-300">
+            {/* Dynamic Warnings OR Extraction Timer */}
+            <div className="px-3 min-h-[48px] flex items-start">
+              {isLoading ? (
+                <div className="text-xs text-[#aaaaaa] flex items-start gap-2 animate-in fade-in duration-300">
+                  <svg
+                    className="w-5 h-5 text-[#a855f7] animate-spin flex-shrink-0 mt-0.5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  <span>
+                    <strong className="text-[#f1f1f1] text-sm">
+                      Extracting media details...{" "}
+                      <span className="text-[#a855f7]">({searchTimer}s)</span>
+                    </strong>
+                    <br />
+                    <span className="opacity-80">
+                      This process usually takes 10-30 seconds depending on the
+                      platform. Please be patient and do not refresh the page.
+                    </span>
+                  </span>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5 w-full">
+                  {isFacebook && (
+                    <p className="text-xs text-[#aaaaaa] flex items-center gap-1.5 animate-in fade-in duration-300">
                       <svg
-                        className="w-4 h-4 sm:w-5 sm:h-5 text-[#a855f7] animate-spin flex-shrink-0 mt-0.5"
+                        className="w-4 h-4 text-[#a855f7]"
                         fill="none"
+                        stroke="currentColor"
                         viewBox="0 0 24 24"
                       >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        ></circle>
                         <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                      </svg>
-                      <span>
-                        <strong className="text-[#f1f1f1] text-xs sm:text-sm">
-                          Extracting audio details...{" "}
-                          <span className="text-[#a855f7]">
-                            ({reelSearchTimer}s)
-                          </span>
-                        </strong>
-                        <br />
-                        <span className="opacity-80">
-                          This may take 10–30 seconds. Please wait.
-                        </span>
-                      </span>
-                    </div>
-                  )}
-
-                  {reelError && (
-                    <div className="p-3 sm:p-4 bg-[#ff0000]/10 border border-[#ff0000]/30 text-[#ff4e4e] rounded-xl flex items-start gap-2 sm:gap-3">
-                      <svg
-                        className="w-4 h-4 sm:w-5 sm:h-5 mt-0.5 flex-shrink-0"
-                        fill="currentColor"
-                        viewBox="0 0 20 20"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
-                          clipRule="evenodd"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                         />
                       </svg>
-                      <p className="text-xs sm:text-sm font-medium">
-                        {reelError}
-                      </p>
-                    </div>
+                      <span>
+                        <strong>Note:</strong> Facebook videos will only contain
+                        audio if the underlying music is strictly public.
+                      </span>
+                    </p>
                   )}
+                  {isYouTube && (
+                    <p className="text-xs text-[#aaaaaa] flex items-center gap-1.5 animate-in fade-in duration-300">
+                      <svg
+                        className="w-4 h-4 text-[#ff4e4e]"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                        />
+                      </svg>
+                      <span>
+                        <strong>Requirement:</strong> Ensure the YouTube video
+                        is fully public. Private or unlisted videos cannot be
+                        fetched.
+                      </span>
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
 
-                  {reelData && (
-                    <div className="bg-[#181818] border border-[#272727] rounded-2xl overflow-hidden shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-500">
-                      <div className="relative h-28 sm:h-44 bg-black overflow-hidden border-b border-[#272727]">
-                        {reelData.thumbnail && !reelImgError ? (
-                          <img
-                            src={proxyThumbnail(reelData.thumbnail)}
-                            alt={reelData.title}
-                            onError={() => setReelImgError(true)}
-                            className="w-full h-full object-cover opacity-60"
-                            crossOrigin="anonymous"
-                          />
-                        ) : (
-                          <div className="w-full h-full bg-[#121212]" />
-                        )}
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <div className="flex items-end gap-0.5 sm:gap-1 h-8 sm:h-12">
-                            {[
-                              4, 7, 10, 8, 12, 6, 9, 11, 5, 8, 10, 7, 4, 9, 12,
-                              6, 8, 10, 7, 5,
-                            ].map((h, i) => (
-                              <div
-                                key={i}
-                                className="w-0.5 sm:w-1 bg-[#a855f7] rounded-full opacity-80 animate-pulse"
-                                style={{
-                                  height: `${h * 3}px`,
-                                  animationDelay: `${i * 0.07}s`,
-                                  animationDuration: `${0.8 + (i % 3) * 0.2}s`,
+          {/* Error Message */}
+          {error && (
+            <div className="p-4 bg-[#ff0000]/10 border border-[#ff0000]/30 text-[#ff4e4e] rounded-xl flex items-start gap-3">
+              <svg
+                className="w-5 h-5 mt-0.5 flex-shrink-0"
+                fill="currentColor"
+                viewBox="0 0 20 20"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              <p className="text-sm font-medium">{error}</p>
+            </div>
+          )}
+
+          {/* Video Data Display */}
+          {videoData && (
+            <div className="bg-[#181818] border border-[#272727] rounded-2xl overflow-hidden shadow-2xl transition-all animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="relative aspect-video bg-black group overflow-hidden border-b border-[#272727]">
+                {videoData.thumbnail && !imgError ? (
+                  <img
+                    src={videoData.thumbnail}
+                    alt={videoData.title}
+                    onError={() => setImgError(true)}
+                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 absolute inset-0"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center w-full h-full text-[#555555] bg-[#121212] absolute inset-0">
+                    <svg
+                      className="w-16 h-16 mb-3 opacity-40"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M21 3H3C2.44772 3 2 3.44772 2 4V20C2 20.5523 2.44772 21 3 21H21C21.5523 21 22 20.5523 22 20V4C22 3.44772 21.5523 3 21 3ZM20 19H4V5H20V19ZM15.5 10.5C15.5 11.3284 14.8284 12 14 12C13.1716 12 12.5 11.3284 12.5 10.5C12.5 9.67157 13.1716 9 14 9C14.8284 9 15.5 9.67157 15.5 10.5ZM8.5 15.5L11.5 11.5L14 14.5L17 10L19 15.5H5L8.5 15.5Z" />
+                    </svg>
+                    <span className="text-sm font-medium tracking-wide">
+                      Media preview unavailable
+                    </span>
+                  </div>
+                )}
+                <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                  <div className="w-16 h-16 bg-gradient-to-br from-[#8b5cf6] to-[#a855f7] rounded-full flex items-center justify-center shadow-lg">
+                    <svg
+                      className="w-8 h-8 text-white ml-1"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-5 sm:p-7 space-y-6">
+                <div>
+                  <h2 className="text-lg sm:text-xl font-semibold line-clamp-2 text-[#f1f1f1] leading-snug">
+                    {videoData.title}
+                  </h2>
+                  {videoData.description && (
+                    <p className="text-sm text-[#aaaaaa] mt-2 line-clamp-2">
+                      {videoData.description}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-[#272727]">
+                  <div
+                    className="relative w-full sm:w-1/2"
+                    ref={dropdownContainerRef}
+                  >
+                    <button
+                      ref={dropdownButtonRef}
+                      onClick={toggleDropdown}
+                      className="w-full flex items-center justify-between px-5 py-3.5 bg-[#222222] hover:bg-[#303030] border border-[#303030] rounded-xl transition-colors focus:outline-none"
+                    >
+                      {selectedFormatObj ? (
+                        renderQualityLabel(selectedFormatObj)
+                      ) : (
+                        <span className="text-[#f1f1f1]">Select Quality</span>
+                      )}
+                      <svg
+                        className={`w-4 h-4 text-[#aaaaaa] transition-transform ${isDropdownOpen ? "rotate-180" : ""}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                          d="M19 9l-7 7-7-7"
+                        />
+                      </svg>
+                    </button>
+
+                    {isDropdownOpen && (
+                      <div
+                        className={`absolute z-10 w-full bg-[#222222] border border-[#303030] shadow-2xl rounded-xl overflow-hidden py-2 ${dropdownDirection === "up" ? "bottom-full mb-2" : "top-full mt-2"}`}
+                      >
+                        <div className="max-h-60 overflow-y-auto custom-scrollbar">
+                          {videoData.formats.map((format, idx) => {
+                            const isSelected =
+                              selectedFormatObj?.format_id === format.format_id;
+                            return (
+                              <button
+                                key={idx}
+                                onClick={() => {
+                                  setSelectedFormatObj(format);
+                                  setIsDropdownOpen(false);
                                 }}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                        {reelData.duration > 0 && (
-                          <div className="absolute bottom-2 right-2 sm:bottom-3 sm:right-3 bg-black/70 text-white text-[10px] sm:text-xs font-bold px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-md">
-                            {formatDuration(reelData.duration)}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="p-4 sm:p-7 space-y-4 sm:space-y-5">
-                        <h2 className="text-sm sm:text-lg font-semibold line-clamp-2 text-[#f1f1f1] leading-snug">
-                          {reelData.title}
-                        </h2>
-
-                        <div ref={audioDropdownRef} className="relative">
-                          <button
-                            onClick={() =>
-                              setIsAudioDropdownOpen(!isAudioDropdownOpen)
-                            }
-                            className="w-full flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 bg-[#222222] hover:bg-[#303030] border border-[#303030] rounded-xl transition-colors focus:outline-none text-sm sm:text-base"
-                          >
-                            <span className="flex items-center gap-2 text-[#f1f1f1]">
-                              <svg
-                                className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#a855f7]"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
+                                className={`w-full flex items-center justify-between px-5 py-3 text-left transition-colors ${isSelected ? "bg-[#333333] border-l-2 border-[#f1f1f1]" : "hover:bg-[#303030] border-l-2 border-transparent"}`}
                               >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="2"
-                                  d="M15.536 8.464a5 5 0 010 7.072M12 9.5V12m0 0v2.5M12 12h2.5M12 12H9.5"
-                                />
-                              </svg>
-                              {selectedAudioFormat
-                                ? `${selectedAudioFormat.quality} · ${selectedAudioFormat.ext?.toUpperCase()} → MP3`
-                                : "Select Audio Quality"}
-                              {selectedAudioFormat?.filesize && (
-                                <span className="text-[10px] sm:text-xs text-[#aaaaaa]">
-                                  ({selectedAudioFormat.filesize})
-                                </span>
-                              )}
-                            </span>
+                                <div className="flex items-center gap-3">
+                                  {isSelected && (
+                                    <svg
+                                      className="w-4 h-4 text-[#f1f1f1]"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth="3"
+                                        d="M5 13l4 4L19 7"
+                                      />
+                                    </svg>
+                                  )}
+                                  {renderQualityLabel(format)}
+                                </div>
+                                {format.filesize && (
+                                  <span className="text-xs font-medium text-[#aaaaaa]">
+                                    {format.filesize}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={handleDownload}
+                    disabled={isDownloading || !selectedFormatObj}
+                    className="relative overflow-hidden w-full sm:w-1/2 px-5 py-3.5 bg-[#f1f1f1] hover:bg-[#d9d9d9] text-[#0f0f0f] font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isDownloading && downloadProgress < 100 && (
+                      <div
+                        className="absolute left-0 top-0 bottom-0 bg-black/10 transition-all duration-300 z-0"
+                        style={{ width: `${downloadProgress}%` }}
+                      />
+                    )}
+                    <span className="relative z-10 flex items-center justify-center gap-2">
+                      {isDownloading ? (
+                        downloadProgress === 100 ? (
+                          <>
                             <svg
-                              className={`w-4 h-4 text-[#aaaaaa] transition-transform flex-shrink-0 ml-2 ${isAudioDropdownOpen ? "rotate-180" : ""}`}
+                              className="w-5 h-5 text-green-600"
                               fill="none"
                               stroke="currentColor"
                               viewBox="0 0 24 24"
@@ -1712,612 +695,51 @@ export default function Home() {
                                 strokeLinecap="round"
                                 strokeLinejoin="round"
                                 strokeWidth="2"
-                                d="M19 9l-7 7-7-7"
-                              />
-                            </svg>
-                          </button>
-                          {isAudioDropdownOpen && (
-                            <div className="absolute z-10 w-full bg-[#222222] border border-[#303030] shadow-2xl rounded-xl overflow-hidden py-2 top-full mt-2">
-                              <div className="max-h-48 sm:max-h-52 overflow-y-auto custom-scrollbar">
-                                {reelData.audioFormats.map((fmt, idx) => {
-                                  const isSel =
-                                    selectedAudioFormat?.format_id ===
-                                    fmt.format_id;
-                                  return (
-                                    <button
-                                      key={idx}
-                                      onClick={() => {
-                                        setSelectedAudioFormat(fmt);
-                                        setIsAudioDropdownOpen(false);
-                                      }}
-                                      className={`w-full flex items-center justify-between px-4 sm:px-5 py-2.5 sm:py-3 text-left transition-colors text-sm ${isSel ? "bg-[#333333] border-l-2 border-[#a855f7]" : "hover:bg-[#303030] border-l-2 border-transparent"}`}
-                                    >
-                                      <span className="flex items-center gap-2 text-[#f1f1f1]">
-                                        {isSel && (
-                                          <svg
-                                            className="w-4 h-4 text-[#a855f7]"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
-                                          >
-                                            <path
-                                              strokeLinecap="round"
-                                              strokeLinejoin="round"
-                                              strokeWidth="3"
-                                              d="M5 13l4 4L19 7"
-                                            />
-                                          </svg>
-                                        )}
-                                        {fmt.quality}
-                                        <span className="text-[10px] bg-[#333] px-1.5 py-0.5 rounded text-[#aaaaaa] uppercase">
-                                          {fmt.ext}
-                                        </span>
-                                      </span>
-                                      {fmt.filesize && (
-                                        <span className="text-xs text-[#717171]">
-                                          {fmt.filesize}
-                                        </span>
-                                      )}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Ringtone Trimmer */}
-                        <div className="bg-[#121212] border border-[#272727] rounded-xl overflow-hidden">
-                          <button
-                            onClick={() => setTrimEnabled(!trimEnabled)}
-                            className="w-full flex items-center justify-between px-4 sm:px-5 py-3 sm:py-3.5 hover:bg-[#1a1a1a] transition-colors"
-                          >
-                            <span className="flex items-center gap-2 text-xs sm:text-sm font-medium text-[#f1f1f1]">
-                              <svg
-                                className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#a855f7]"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="2"
-                                  d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z"
-                                />
-                              </svg>
-                              Trim for Ringtone
-                              <span className="text-[9px] sm:text-[10px] bg-[#a855f7]/20 text-[#a855f7] border border-[#a855f7]/30 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wider">
-                                Optional
-                              </span>
-                            </span>
-                            <div
-                              className={`w-9 h-5 sm:w-10 sm:h-5 rounded-full transition-colors duration-200 relative flex-shrink-0 ${trimEnabled ? "bg-[#a855f7]" : "bg-[#303030]"}`}
-                            >
-                              <div
-                                className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${trimEnabled ? "translate-x-4 sm:translate-x-5" : "translate-x-0.5"}`}
-                              />
-                            </div>
-                          </button>
-                          {trimEnabled && trimDuration > 0 && (
-                            <div className="px-4 sm:px-5 pb-4 sm:pb-5 space-y-3 sm:space-y-4 border-t border-[#272727]">
-                              <div className="flex items-center justify-between pt-3 sm:pt-4">
-                                <span className="text-xs text-[#aaaaaa]">
-                                  Selected:{" "}
-                                  <strong className="text-[#f1f1f1]">
-                                    {formatDuration(trimEnd - trimStart)}
-                                  </strong>
-                                </span>
-                                <span className="text-xs text-[#717171]">
-                                  Total: {formatDuration(trimDuration)}
-                                </span>
-                              </div>
-                              <div className="space-y-1">
-                                <div className="flex justify-between text-xs text-[#aaaaaa]">
-                                  <span>
-                                    Start:{" "}
-                                    <strong className="text-[#f1f1f1]">
-                                      {formatDuration(trimStart)}
-                                    </strong>
-                                  </span>
-                                </div>
-                                <input
-                                  type="range"
-                                  min={0}
-                                  max={Math.max(0, trimEnd - 1)}
-                                  step={1}
-                                  value={trimStart}
-                                  onChange={(e) =>
-                                    setTrimStart(Number(e.target.value))
-                                  }
-                                  className="w-full h-2 rounded-full appearance-none cursor-pointer audio-slider"
-                                  style={{
-                                    background: `linear-gradient(to right, #a855f7 0%, #a855f7 ${(trimStart / trimDuration) * 100}%, #303030 ${(trimStart / trimDuration) * 100}%, #303030 100%)`,
-                                  }}
-                                />
-                              </div>
-                              <div className="space-y-1">
-                                <div className="flex justify-between text-xs text-[#aaaaaa]">
-                                  <span>
-                                    End:{" "}
-                                    <strong className="text-[#f1f1f1]">
-                                      {formatDuration(trimEnd)}
-                                    </strong>
-                                  </span>
-                                </div>
-                                <input
-                                  type="range"
-                                  min={trimStart + 1}
-                                  max={trimDuration}
-                                  step={1}
-                                  value={trimEnd}
-                                  onChange={(e) =>
-                                    setTrimEnd(Number(e.target.value))
-                                  }
-                                  className="w-full h-2 rounded-full appearance-none cursor-pointer audio-slider"
-                                  style={{
-                                    background: `linear-gradient(to right, #a855f7 0%, #a855f7 ${(trimEnd / trimDuration) * 100}%, #303030 ${(trimEnd / trimDuration) * 100}%, #303030 100%)`,
-                                  }}
-                                />
-                              </div>
-                              <div className="relative h-7 sm:h-8 bg-[#1a1a1a] rounded-lg overflow-hidden border border-[#2a2a2a]">
-                                <div
-                                  className="absolute top-0 bottom-0 bg-[#a855f7]/30 border-x-2 border-[#a855f7] transition-all duration-150"
-                                  style={{
-                                    left: `${(trimStart / trimDuration) * 100}%`,
-                                    width: `${((trimEnd - trimStart) / trimDuration) * 100}%`,
-                                  }}
-                                />
-                                <div className="absolute inset-0 flex items-center justify-center text-[10px] sm:text-xs text-[#717171] pointer-events-none">
-                                  {formatDuration(trimStart)} →{" "}
-                                  {formatDuration(trimEnd)}
-                                </div>
-                              </div>
-                              <p className="text-[10px] sm:text-xs text-[#717171] flex items-center gap-1">
-                                <svg
-                                  className="w-3 h-3 sm:w-3.5 sm:h-3.5 flex-shrink-0"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth="2"
-                                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                  />
-                                </svg>
-                                Ideal ringtone length is 20–40 seconds. Saved as{" "}
-                                <strong className="text-[#aaaaaa]">
-                                  _ringtone.mp3
-                                </strong>
-                              </p>
-                            </div>
-                          )}
-                          {trimEnabled && trimDuration === 0 && (
-                            <p className="px-4 sm:px-5 pb-3 pt-2 text-xs text-[#717171] border-t border-[#272727]">
-                              Duration not available. Trim may not work.
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="flex gap-2">
-                          <button
-                            onClick={handleAudioDownload}
-                            disabled={
-                              isAudioDownloading || !selectedAudioFormat
-                            }
-                            className="relative overflow-hidden flex-1 px-4 sm:px-5 py-3 sm:py-3.5 bg-[#f1f1f1] hover:bg-[#d9d9d9] text-[#0f0f0f] font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
-                          >
-                            {isAudioDownloading &&
-                              audioDownloadProgress < 100 && (
-                                <div
-                                  className="absolute left-0 top-0 bottom-0 bg-black/10 transition-all duration-300 z-0"
-                                  style={{ width: `${audioDownloadProgress}%` }}
-                                />
-                              )}
-                            <span className="relative z-10 flex items-center justify-center gap-2">
-                              {isAudioDownloading ? (
-                                audioDownloadProgress === 100 ? (
-                                  <>
-                                    <svg
-                                      className="w-4 h-4 text-green-600"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      viewBox="0 0 24 24"
-                                    >
-                                      <path
-                                        strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        strokeWidth="2"
-                                        d="M5 13l4 4L19 7"
-                                      ></path>
-                                    </svg>
-                                    Done!
-                                  </>
-                                ) : (
-                                  `${audioDownloadProgress}%`
-                                )
-                              ) : (
-                                <>
-                                  <svg
-                                    className="w-4 h-4 sm:w-5 sm:h-5"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth="2"
-                                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                                    ></path>
-                                  </svg>
-                                  {trimEnabled
-                                    ? "Download Ringtone"
-                                    : "Download Audio (.mp3)"}
-                                </>
-                              )}
-                            </span>
-                          </button>
-                          <div className="relative" ref={audioShareMenuRef}>
-                            <button
-                              onClick={() =>
-                                setAudioShareMenuOpen(!audioShareMenuOpen)
-                              }
-                              className="h-full px-3 sm:px-4 py-3 sm:py-3.5 bg-[#222222] hover:bg-[#303030] border border-[#303030] rounded-xl transition-colors flex items-center gap-1.5"
-                              title="Share"
-                            >
-                              <svg
-                                className="w-4 h-4 text-[#aaaaaa]"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="2"
-                                  d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
-                                />
-                              </svg>
-                              <span className="hidden sm:inline text-sm text-[#aaaaaa]">
-                                Share
-                              </span>
-                            </button>
-                            <ShareDropdown
-                              isOpen={audioShareMenuOpen}
-                              onShare={handleShareAudio}
-                              hasNativeShare={
-                                typeof navigator !== "undefined" &&
-                                !!navigator.share
-                              }
-                              menuRef={audioShareMenuRef}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* SONG SEARCH */}
-              {audioTab === "search" && (
-                <div className="space-y-4 sm:space-y-5">
-                  <form
-                    onSubmit={handleSongSearch}
-                    className="relative flex flex-col sm:flex-row shadow-lg gap-2 sm:gap-0"
-                  >
-                    <div className="relative flex-1 flex">
-                      <div className="absolute inset-y-0 left-0 pl-3 sm:pl-4 flex items-center pointer-events-none">
-                        <svg
-                          className="h-4 w-4 sm:h-5 sm:w-5 text-[#a855f7]"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2"
-                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                          />
-                        </svg>
-                      </div>
-                      <input
-                        type="text"
-                        className="w-full pl-10 sm:pl-12 pr-4 py-3 sm:py-3.5 bg-[#121212] border border-[#303030] sm:rounded-l-full sm:rounded-r-none rounded-full focus:outline-none focus:border-[#a855f7] focus:bg-[#0f0f0f] transition-all text-sm sm:text-base placeholder-[#717171]"
-                        placeholder="Search by song name, artist, or lyrics..."
-                        value={songQuery}
-                        onChange={(e) => setSongQuery(e.target.value)}
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={songSearchLoading || !songQuery.trim()}
-                      className="px-6 sm:px-8 py-3 sm:py-3.5 bg-[#222222] border border-[#303030] sm:border-l-0 hover:bg-[#303030] text-[#f1f1f1] font-medium sm:rounded-r-full sm:rounded-l-none rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-sm sm:text-base"
-                    >
-                      {songSearchLoading ? (
-                        <svg
-                          className="animate-spin h-4 w-4 sm:h-5 sm:w-5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                        >
-                          <circle
-                            className="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            strokeWidth="4"
-                          ></circle>
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                          ></path>
-                        </svg>
+                                d="M5 13l4 4L19 7"
+                              ></path>
+                            </svg>{" "}
+                            Complete!
+                          </>
+                        ) : (
+                          `Processing... ${downloadProgress}%`
+                        )
                       ) : (
-                        "Search"
-                      )}
-                    </button>
-                  </form>
-
-                  {songSearchLoading && (
-                    <div className="text-xs text-[#aaaaaa] flex items-center gap-2 px-2 sm:px-3 animate-in fade-in duration-300">
-                      <svg
-                        className="w-4 h-4 text-[#a855f7] animate-spin"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        ></circle>
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                      </svg>
-                      <span>Searching for songs...</span>
-                    </div>
-                  )}
-
-                  {songError && (
-                    <div className="p-3 sm:p-4 bg-[#ff0000]/10 border border-[#ff0000]/30 text-[#ff4e4e] rounded-xl flex items-start gap-2 sm:gap-3">
-                      <svg
-                        className="w-4 h-4 sm:w-5 sm:h-5 mt-0.5 flex-shrink-0"
-                        fill="currentColor"
-                        viewBox="0 0 20 20"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
-                      <p className="text-xs sm:text-sm font-medium">
-                        {songError}
-                      </p>
-                    </div>
-                  )}
-
-                  {songResults.length > 0 && (
-                    <div className="space-y-2 animate-in fade-in duration-300">
-                      <p className="text-xs text-[#717171] px-1">
-                        {songResults.length} results — tap download to save as
-                        MP3
-                      </p>
-                      {songResults.map((song) => {
-                        const isThisDownloading = downloadingId === song.id;
-                        const isDone = downloadedIds.has(song.id);
-                        const prog = songDownloadProgress[song.id] || 0;
-                        return (
-                          <div
-                            key={song.id}
-                            className="flex items-center gap-2 sm:gap-3 p-2.5 sm:p-4 bg-[#181818] border border-[#272727] hover:border-[#3a3a3a] rounded-xl transition-all group"
+                        <>
+                          <svg
+                            className="w-5 h-5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
                           >
-                            <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-lg overflow-hidden bg-[#222222] flex-shrink-0 relative">
-                              {song.thumbnail ? (
-                                <img
-                                  src={song.thumbnail}
-                                  alt={song.title}
-                                  className="w-full h-full object-cover"
-                                  onError={(e) => {
-                                    e.target.style.display = "none";
-                                  }}
-                                />
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-center">
-                                  <svg
-                                    className="w-5 h-5 sm:w-6 sm:h-6 text-[#555]"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth="2"
-                                      d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
-                                    />
-                                  </svg>
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs sm:text-sm font-medium text-[#f1f1f1] line-clamp-1 leading-snug">
-                                {song.title}
-                              </p>
-                              <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 sm:mt-1 flex-wrap">
-                                {song.uploader && (
-                                  <span className="text-[10px] sm:text-xs text-[#717171]">
-                                    {song.uploader}
-                                  </span>
-                                )}
-                                {song.uploader && song.duration > 0 && (
-                                  <span className="text-[#444] text-[10px] sm:text-xs">
-                                    ·
-                                  </span>
-                                )}
-                                {song.duration > 0 && (
-                                  <span className="text-[10px] sm:text-xs text-[#717171]">
-                                    {formatDuration(song.duration)}
-                                  </span>
-                                )}
-                                {song.view_count > 0 && (
-                                  <>
-                                    <span className="text-[#444] text-[10px]">
-                                      ·
-                                    </span>
-                                    <span className="text-[10px] text-[#555]">
-                                      {formatViews(song.view_count)}
-                                    </span>
-                                  </>
-                                )}
-                              </div>
-                              {isThisDownloading && prog > 0 && prog < 100 && (
-                                <div className="mt-1.5 h-1 bg-[#303030] rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-[#a855f7] transition-all duration-300 rounded-full"
-                                    style={{ width: `${prog}%` }}
-                                  />
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-                              <button
-                                onClick={() =>
-                                  handleShareSong(song, "whatsapp")
-                                }
-                                className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#25D366]/10 hover:bg-[#25D366]/20 flex items-center justify-center transition-colors"
-                                title="Share on WhatsApp"
-                              >
-                                <svg
-                                  className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#25D366]"
-                                  fill="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => handleSongDownload(song)}
-                                disabled={!!downloadingId || isDone}
-                                className={`flex-shrink-0 flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-full transition-all duration-200 ${isDone ? "bg-green-500/20 text-green-500 border border-green-500/30" : isThisDownloading ? "bg-[#a855f7]/20 text-[#a855f7] border border-[#a855f7]/30" : "bg-[#222222] text-[#aaaaaa] border border-[#303030] hover:bg-[#a855f7] hover:text-white hover:border-[#a855f7] group-hover:border-[#a855f7]/50"} disabled:opacity-60 disabled:cursor-not-allowed`}
-                                title={
-                                  isDone
-                                    ? "Downloaded"
-                                    : isThisDownloading
-                                      ? `Downloading ${prog}%`
-                                      : "Download MP3"
-                                }
-                              >
-                                {isDone ? (
-                                  <svg
-                                    className="w-4 h-4"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth="2.5"
-                                      d="M5 13l4 4L19 7"
-                                    />
-                                  </svg>
-                                ) : isThisDownloading ? (
-                                  <svg
-                                    className="animate-spin w-4 h-4"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <circle
-                                      className="opacity-25"
-                                      cx="12"
-                                      cy="12"
-                                      r="10"
-                                      stroke="currentColor"
-                                      strokeWidth="4"
-                                    ></circle>
-                                    <path
-                                      className="opacity-75"
-                                      fill="currentColor"
-                                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                    ></path>
-                                  </svg>
-                                ) : (
-                                  <svg
-                                    className="w-4 h-4"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth="2"
-                                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                                    />
-                                  </svg>
-                                )}
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {!songSearchLoading &&
-                    songResults.length === 0 &&
-                    !songError && (
-                      <div className="text-center py-8 sm:py-10 text-[#555555]">
-                        <svg
-                          className="w-10 h-10 sm:w-12 sm:h-12 mx-auto mb-3 opacity-40"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="1.5"
-                            d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
-                          />
-                        </svg>
-                        <p className="text-sm">
-                          Search for any song, artist, or track name
-                        </p>
-                        <p className="text-xs mt-1 opacity-60">
-                          Results will be downloaded as high-quality MP3
-                        </p>
-                      </div>
-                    )}
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth="2"
+                              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                            ></path>
+                          </svg>{" "}
+                          Download File
+                        </>
+                      )}
+                    </span>
+                  </button>
                 </div>
-              )}
+              </div>
             </div>
           )}
         </div>
 
-        {/* Profile Card */}
-        <div className="w-full max-w-3xl mt-10 sm:mt-24 mb-4">
+        {/* ─── SLEEK MINI-PROFILE CARD (Trigger for Modal) ─── */}
+        <div className="w-full max-w-3xl mt-16 sm:mt-24 mb-4">
           <button
             onClick={() => setIsProfileOpen(true)}
-            className="flex items-center gap-3 sm:gap-4 px-4 sm:px-5 py-3 sm:py-3.5 bg-[#181818] hover:bg-[#202020] border border-[#272727] hover:border-[#3a3a3a] rounded-2xl transition-all shadow-lg group mx-auto w-fit"
+            className="flex items-center gap-4 px-5 py-3.5 bg-[#181818] hover:bg-[#202020] border border-[#272727] hover:border-[#3a3a3a] rounded-2xl transition-all shadow-lg group mx-auto w-fit"
           >
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full overflow-hidden border border-[#3f3f3f] bg-[#1e1e1e] flex items-center justify-center text-[#aaaaaa] flex-shrink-0">
+            <div className="w-12 h-12 rounded-full overflow-hidden border border-[#3f3f3f] bg-[#1e1e1e] flex items-center justify-center text-[#aaaaaa]">
               <svg
                 viewBox="0 0 24 24"
                 fill="currentColor"
-                className="w-9 h-9 sm:w-10 sm:h-10"
+                className="w-10 h-10"
               >
                 <path
                   fillRule="evenodd"
@@ -2326,16 +748,16 @@ export default function Home() {
                 />
               </svg>
             </div>
-            <div className="text-left pr-1 sm:pr-2">
-              <h4 className="text-[#f1f1f1] font-semibold text-xs sm:text-sm group-hover:text-white transition-colors">
+            <div className="text-left pr-2">
+              <h4 className="text-[#f1f1f1] font-semibold text-sm group-hover:text-white transition-colors">
                 Developed by Jagan Parida
               </h4>
-              <p className="text-[#aaaaaa] text-[10px] sm:text-xs">
+              <p className="text-[#aaaaaa] text-xs">
                 Full Stack Developer | View Profile
               </p>
             </div>
             <svg
-              className="w-4 h-4 sm:w-5 sm:h-5 text-[#717171] group-hover:text-white transition-colors ml-1 sm:ml-2"
+              className="w-5 h-5 text-[#717171] group-hover:text-white transition-colors ml-2"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -2351,11 +773,11 @@ export default function Home() {
         </div>
       </main>
 
-      {/* FOOTER */}
-      <footer className="w-full bg-[#0f0f0f] border-t border-[#272727] py-4 sm:py-8 mt-auto">
-        <div className="max-w-4xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-4 text-[10px] sm:text-xs text-[#717171]">
+      {/* Footer */}
+      <footer className="w-full bg-[#0f0f0f] border-t border-[#272727] py-6 sm:py-8 mt-auto">
+        <div className="max-w-4xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-[#717171]">
           <p>© {new Date().getFullYear()} Media Pro. All rights reserved.</p>
-          <div className="flex gap-3 sm:gap-4">
+          <div className="flex gap-4">
             <a href="#" className="hover:text-[#aaaaaa] transition-colors">
               Privacy Policy
             </a>
@@ -2366,182 +788,15 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* DOWNLOAD HISTORY MODAL */}
-      {showHistory && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
-          <div
-            className="absolute inset-0"
-            onClick={() => setShowHistory(false)}
-          ></div>
-          <div className="relative w-full sm:max-w-lg bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl animate-in slide-in-from-bottom duration-300 max-h-[85vh] flex flex-col">
-            <div className="px-4 sm:px-6 py-4 border-b border-[#272727] flex items-center justify-between flex-shrink-0">
-              <h3 className="text-base sm:text-lg font-bold text-[#f1f1f1] flex items-center gap-2">
-                <svg
-                  className="w-4 h-4 sm:w-5 sm:h-5 text-[#a855f7]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-                Download History
-                {downloadHistory.length > 0 && (
-                  <span className="text-xs bg-[#272727] text-[#aaaaaa] px-2 py-0.5 rounded-full">
-                    {downloadHistory.length}
-                  </span>
-                )}
-              </h3>
-              <div className="flex items-center gap-2">
-                {downloadHistory.length > 0 && (
-                  <button
-                    onClick={clearHistory}
-                    className="text-xs text-[#717171] hover:text-[#ff4e4e] transition-colors px-2 py-1 rounded-lg hover:bg-[#ff4e4e]/10"
-                  >
-                    Clear All
-                  </button>
-                )}
-                <button
-                  onClick={() => setShowHistory(false)}
-                  className="w-7 h-7 flex items-center justify-center rounded-full bg-[#272727] hover:bg-[#3f3f3f] text-[#aaaaaa] hover:text-white transition-colors"
-                >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="overflow-y-auto flex-1 custom-scrollbar">
-              {downloadHistory.length === 0 ? (
-                <div className="text-center py-12 text-[#555555]">
-                  <svg
-                    className="w-10 h-10 mx-auto mb-3 opacity-40"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="1.5"
-                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <p className="text-sm">No downloads yet</p>
-                  <p className="text-xs mt-1 opacity-60">
-                    Your download history will appear here
-                  </p>
-                </div>
-              ) : (
-                <div className="p-3 sm:p-4 space-y-2">
-                  {downloadHistory.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center gap-3 p-3 bg-[#121212] border border-[#272727] rounded-xl"
-                    >
-                      <div className="w-10 h-10 rounded-lg overflow-hidden bg-[#222] flex-shrink-0">
-                        {item.thumbnail ? (
-                          <img
-                            src={proxyThumbnail(item.thumbnail)}
-                            alt={item.title}
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              e.target.style.display = "none";
-                            }}
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <svg
-                              className="w-5 h-5 text-[#555]"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              {item.type === "video" ? (
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="2"
-                                  d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
-                                />
-                              ) : (
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth="2"
-                                  d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
-                                />
-                              )}
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs sm:text-sm font-medium text-[#f1f1f1] line-clamp-1">
-                          {item.title}
-                        </p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${item.type === "video" ? "bg-blue-500/20 text-blue-400" : "bg-[#a855f7]/20 text-[#a855f7]"}`}
-                          >
-                            {item.type}
-                          </span>
-                          <span className="text-[10px] text-[#717171]">
-                            {item.quality}
-                          </span>
-                          <span className="text-[10px] text-[#555]">
-                            {new Date(item.timestamp).toLocaleDateString()}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() =>
-                          shareOnWhatsApp(
-                            `🎬 Downloaded "${item.title}" using MediaPro!\n${item.url}`,
-                          )
-                        }
-                        className="w-8 h-8 rounded-full bg-[#25D366]/10 hover:bg-[#25D366]/20 flex items-center justify-center transition-colors flex-shrink-0"
-                        title="Share on WhatsApp"
-                      >
-                        <svg
-                          className="w-3.5 h-3.5 text-[#25D366]"
-                          fill="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* PROFILE MODAL */}
+      {/* ─── PREMIUM GLASSMORPHISM PROFILE MODAL ─── */}
       {isProfileOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
           <div
             className="absolute inset-0"
             onClick={() => setIsProfileOpen(false)}
           ></div>
-          <div className="relative w-full sm:max-w-xl bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300">
+
+          <div className="relative w-full max-w-xl bg-[#181818] border border-[#272727] rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
             <div className="flex items-center justify-end px-4 py-3 border-b border-[#272727]">
               <button
                 onClick={() => setIsProfileOpen(false)}
@@ -2562,9 +817,10 @@ export default function Home() {
                 </svg>
               </button>
             </div>
-            <div className="p-5 sm:p-8">
-              <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-center sm:items-start">
-                <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden border border-[#3f3f3f] flex-shrink-0 bg-[#1e1e1e] flex items-center justify-center">
+
+            <div className="p-6 sm:p-8">
+              <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start">
+                <div className="w-24 h-24 rounded-full overflow-hidden border border-[#3f3f3f] flex-shrink-0 bg-[#1e1e1e] flex items-center justify-center">
                   <img
                     src="/jagan-profile.jpg"
                     alt="Jagan Parida"
@@ -2588,33 +844,41 @@ export default function Home() {
                     />
                   </svg>
                 </div>
-                <div className="text-center sm:text-left space-y-1.5 sm:space-y-2">
-                  <h3 className="text-xl sm:text-2xl font-bold text-[#f1f1f1]">
+                <div className="text-center sm:text-left space-y-2">
+                  <h3 className="text-2xl font-bold text-[#f1f1f1]">
                     Jagan Parida
                   </h3>
-                  <p className="text-xs sm:text-sm font-medium text-[#a855f7]">
+                  <p className="text-sm font-medium text-[#a855f7]">
                     Full Stack Developer (MERN) | React.js, Next.js, GSAP &
                     Agentic AI | Java DSA Enthusiast
                   </p>
                 </div>
               </div>
-              <div className="mt-4 sm:mt-6 space-y-3 sm:space-y-4 text-xs sm:text-sm text-[#aaaaaa] leading-relaxed">
+
+              <div className="mt-6 space-y-4 text-sm text-[#aaaaaa] leading-relaxed">
                 <p>
                   I am a 3rd-year Computer Science & Engineering student at
-                  Centurion University (Class of &apos;27), dedicated to bridging the
+                  Centurion University (Class of '27), dedicated to bridging the
                   gap between robust engineering logic and immersive user
                   experiences.
                 </p>
+                <p>
+                  My technical foundation is rooted in Data Structures &
+                  Algorithms using Java, where I actively solve complex problems
+                  on platforms like LeetCode and GeeksforGeeks to ensure every
+                  line of code I write is optimized, readable, and scalable.
+                </p>
               </div>
-              <div className="mt-6 sm:mt-8 flex gap-3 sm:gap-4 justify-center sm:justify-start">
+
+              <div className="mt-8 flex gap-4 justify-center sm:justify-start">
                 <a
                   href="https://github.com/JaganParida"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-5 py-2 sm:py-2.5 bg-[#222222] hover:bg-[#303030] text-[#f1f1f1] rounded-xl transition-colors text-xs sm:text-sm font-medium border border-[#303030]"
+                  className="flex items-center gap-2 px-5 py-2.5 bg-[#222222] hover:bg-[#303030] text-[#f1f1f1] rounded-xl transition-colors text-sm font-medium border border-[#303030]"
                 >
                   <svg
-                    className="w-4 h-4 sm:w-5 sm:h-5"
+                    className="w-5 h-5"
                     fill="currentColor"
                     viewBox="0 0 24 24"
                   >
@@ -2630,10 +894,10 @@ export default function Home() {
                   href="https://www.linkedin.com/in/jagan-parida04/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-5 py-2 sm:py-2.5 bg-[#222222] hover:bg-[#0A66C2]/10 text-[#f1f1f1] hover:text-[#0A66C2] rounded-xl transition-all text-xs sm:text-sm font-medium border border-[#303030] hover:border-[#0A66C2]/30"
+                  className="flex items-center gap-2 px-5 py-2.5 bg-[#222222] hover:bg-[#0A66C2]/10 text-[#f1f1f1] hover:text-[#0A66C2] rounded-xl transition-all text-sm font-medium border border-[#303030] hover:border-[#0A66C2]/30"
                 >
                   <svg
-                    className="w-4 h-4 sm:w-5 sm:h-5"
+                    className="w-5 h-5"
                     fill="currentColor"
                     viewBox="0 0 24 24"
                   >
@@ -2647,18 +911,19 @@ export default function Home() {
         </div>
       )}
 
-      {/* FEEDBACK MODAL */}
+      {/* ─── FEEDBACK / BUG REPORT MODAL (MNC STYLE) ─── */}
       {isFeedbackOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
           <div
             className="absolute inset-0"
             onClick={() => setIsFeedbackOpen(false)}
           ></div>
-          <div className="relative w-full sm:max-w-lg bg-[#181818] border border-[#272727] rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 flex flex-col">
-            <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-[#272727] flex items-center justify-between bg-[#1e1e1e]">
-              <h3 className="text-base sm:text-lg font-bold text-[#f1f1f1] flex items-center gap-2">
+
+          <div className="relative w-full max-w-lg bg-[#181818] border border-[#272727] rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 flex flex-col">
+            <div className="px-6 py-5 border-b border-[#272727] flex items-center justify-between bg-[#1e1e1e]">
+              <h3 className="text-lg font-bold text-[#f1f1f1] flex items-center gap-2">
                 <svg
-                  className="w-4 h-4 sm:w-5 sm:h-5 text-[#aaaaaa]"
+                  className="w-5 h-5 text-[#aaaaaa]"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -2674,10 +939,10 @@ export default function Home() {
               </h3>
               <button
                 onClick={() => setIsFeedbackOpen(false)}
-                className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-full hover:bg-[#303030] text-[#aaaaaa] hover:text-white transition-colors"
+                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#303030] text-[#aaaaaa] hover:text-white transition-colors"
               >
                 <svg
-                  className="w-4 h-4 sm:w-5 sm:h-5"
+                  className="w-5 h-5"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -2691,19 +956,17 @@ export default function Home() {
                 </svg>
               </button>
             </div>
-            <form
-              onSubmit={handleFeedbackSubmit}
-              className="p-4 sm:p-6 space-y-4 sm:space-y-5"
-            >
+
+            <form onSubmit={handleFeedbackSubmit} className="p-6 space-y-5">
               <div>
-                <label className="block text-xs sm:text-sm font-medium text-[#aaaaaa] mb-1.5 sm:mb-2">
+                <label className="block text-sm font-medium text-[#aaaaaa] mb-2">
                   What is this regarding?
                 </label>
                 <div className="relative">
                   <select
                     value={feedbackType}
                     onChange={(e) => setFeedbackType(e.target.value)}
-                    className="w-full appearance-none bg-[#121212] border border-[#303030] text-[#f1f1f1] py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl focus:outline-none focus:border-[#3ea6ff] transition-all text-sm"
+                    className="w-full appearance-none bg-[#121212] border border-[#303030] text-[#f1f1f1] py-3 px-4 rounded-xl focus:outline-none focus:border-[#3ea6ff] focus:ring-1 focus:ring-[#3ea6ff] transition-all"
                   >
                     <option value="Bug Report">🐛 Report a Bug</option>
                     <option value="Feature Idea">
@@ -2711,7 +974,7 @@ export default function Home() {
                     </option>
                     <option value="General Help">❓ General Help</option>
                   </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 sm:px-4 text-[#aaaaaa]">
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-[#aaaaaa]">
                     <svg
                       className="w-4 h-4"
                       fill="none"
@@ -2728,21 +991,22 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+
               <div>
-                <label className="block text-xs sm:text-sm font-medium text-[#aaaaaa] mb-1.5 sm:mb-2">
+                <label className="block text-sm font-medium text-[#aaaaaa] mb-2">
                   Description
                 </label>
                 <textarea
                   required
-                  rows="3"
+                  rows="4"
                   value={feedbackMessage}
                   onChange={(e) => setFeedbackMessage(e.target.value)}
                   placeholder="Please describe the issue or share your ideas..."
-                  className="w-full bg-[#121212] border border-[#303030] text-[#f1f1f1] py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl focus:outline-none focus:border-[#3ea6ff] transition-all resize-none placeholder-[#555555] text-sm"
+                  className="w-full bg-[#121212] border border-[#303030] text-[#f1f1f1] py-3 px-4 rounded-xl focus:outline-none focus:border-[#3ea6ff] focus:ring-1 focus:ring-[#3ea6ff] transition-all resize-none placeholder-[#555555]"
                 ></textarea>
-                <p className="text-[10px] sm:text-xs text-[#717171] mt-1.5 sm:mt-2 flex items-start gap-1">
+                <p className="text-xs text-[#717171] mt-2 flex items-start gap-1">
                   <svg
-                    className="w-3.5 h-3.5 flex-shrink-0 mt-0.5"
+                    className="w-4 h-4 flex-shrink-0"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -2754,24 +1018,26 @@ export default function Home() {
                       d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                     />
                   </svg>
-                  Submitting will draft an email to the developer with basic
-                  system diagnostics.
+                  Submitting will draft an email to the developer. Basic system
+                  diagnostics (Browser/OS) will be included to help resolve bugs
+                  faster.
                 </p>
               </div>
-              <div className="pt-1 sm:pt-2 flex justify-end gap-2 sm:gap-3">
+
+              <div className="pt-2 flex justify-end gap-3">
                 <button
                   type="button"
                   onClick={() => setIsFeedbackOpen(false)}
-                  className="px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl font-medium text-[#aaaaaa] hover:text-[#f1f1f1] hover:bg-[#303030] transition-colors text-sm"
+                  className="px-5 py-2.5 rounded-xl font-medium text-[#aaaaaa] hover:text-[#f1f1f1] hover:bg-[#303030] transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 sm:px-6 py-2 sm:py-2.5 bg-[#f1f1f1] text-[#0f0f0f] rounded-xl font-bold hover:bg-[#d9d9d9] transition-colors flex items-center gap-1.5 sm:gap-2 text-sm"
+                  className="px-6 py-2.5 bg-[#f1f1f1] text-[#0f0f0f] rounded-xl font-bold hover:bg-[#d9d9d9] transition-colors flex items-center gap-2"
                 >
                   <svg
-                    className="w-3.5 h-3.5 sm:w-4 sm:h-4"
+                    className="w-4 h-4"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -2791,18 +1057,14 @@ export default function Home() {
         </div>
       )}
 
-      {/* Global CSS */}
+      {/* Global CSS for custom scrollbar */}
       <style
         dangerouslySetInnerHTML={{
           __html: `
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f3f; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #717171; }
-        .audio-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #a855f7; cursor: pointer; border: 2px solid #0f0f0f; box-shadow: 0 0 0 2px #a855f7; }
-        .audio-slider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #a855f7; cursor: pointer; border: 2px solid #0f0f0f; }
-        .audio-slider:focus { outline: none; }
-        @media (max-width: 640px) { .audio-slider::-webkit-slider-thumb { width: 20px; height: 20px; } }
       `,
         }}
       />
