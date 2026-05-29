@@ -102,6 +102,45 @@ const PLATFORM_OPTIONS = {
 const getPlatformOptions = (platform) =>
   PLATFORM_OPTIONS[platform] ?? PLATFORM_OPTIONS.generic;
 
+// ─── Format Selection ─────────────────────────────────────────────────────────
+const cleanFormatId = (formatId) => {
+  const value = Array.isArray(formatId) ? formatId[0] : formatId;
+  if (!value) return null;
+
+  const id = String(value).trim();
+  if (!id || ["best", "undefined", "auto", "bestaudio"].includes(id)) {
+    return null;
+  }
+
+  return /[/+[\]()]/.test(id) ? null : id;
+};
+
+const getVideoFormatSelector = (platform, formatId) => {
+  const id = cleanFormatId(formatId);
+
+  if (platform === "youtube") {
+    return id
+      ? `${id}+bestaudio[ext=m4a]/${id}+bestaudio/best[ext=mp4]/best`
+      : "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
+  }
+
+  if (platform === "instagram") {
+    return id
+      ? `${id}+bestaudio/${id}/best[ext=mp4]/best`
+      : "best[ext=mp4]/bestvideo+bestaudio/best";
+  }
+
+  if (platform === "facebook") {
+    return id
+      ? `${id}/best[ext=mp4]/best`
+      : "best[ext=mp4]/bestvideo+bestaudio/best";
+  }
+
+  return id
+    ? `${id}+bestaudio/${id}/best`
+    : "bestvideo+bestaudio/best";
+};
+
 // ─── Resolution Bucketing ─────────────────────────────────────────────────────
 const bucketResolution = (width, height) => {
   const short = Math.min(width || 0, height || 0);
@@ -413,33 +452,7 @@ const downloadMedia = async (req, res) => {
   const options = getPlatformOptions(platform);
 
   // ── Format selection (same as proven previous code) ────────────────────────
-  let formatStr;
-  if (platform === "youtube") {
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/best[ext=mp4]/best`;
-    } else {
-      formatStr =
-        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
-    }
-  } else if (platform === "instagram") {
-    // Proven working format from previous code
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}+bestaudio/${format_id}/best[ext=mp4]/best`;
-    } else {
-      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
-    }
-  } else if (platform === "facebook") {
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}/best[ext=mp4]/best`;
-    } else {
-      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
-    }
-  } else {
-    formatStr =
-      format_id && format_id !== "best" && format_id !== "undefined"
-        ? `${format_id}+bestaudio/${format_id}/best`
-        : "bestvideo+bestaudio/best";
-  }
+  const formatStr = getVideoFormatSelector(platform, format_id);
 
   console.log(`🎯 Format string: ${formatStr}`);
 
@@ -706,15 +719,8 @@ const downloadAudio = async (req, res) => {
   // as the old working downloadMedia (video download with audio)
   // ══════════════════════════════════════════════════════════════════════════
   if (platform === "instagram" || platform === "facebook") {
-    // This is the SAME format string that worked in the previous version
-    // for video download on Instagram (proved to carry audio correctly).
-    const formatStr =
-      format_id &&
-      format_id !== "best" &&
-      format_id !== "undefined" &&
-      format_id !== "auto"
-        ? `${format_id}/best[ext=mp4]/best`
-        : "best[ext=mp4]/bestvideo+bestaudio/best";
+    // Reuse the same selector as video downloads so Instagram keeps audio.
+    const formatStr = getVideoFormatSelector(platform, format_id);
 
     const tempVideoPath = path.join(os.tmpdir(), `${tempBase}_raw.mp4`);
 
@@ -769,19 +775,16 @@ const downloadAudio = async (req, res) => {
     // ══════════════════════════════════════════════════════════════════════
     // YOUTUBE / GENERIC — prefer audio-only streams (more efficient)
     // ══════════════════════════════════════════════════════════════════════
-    const isAutoFormat =
-      !format_id ||
-      ["bestaudio", "undefined", "best", "auto"].includes(format_id) ||
-      /[/+[\]()]/.test(format_id); // reject selector strings
+    const audioFormatId = cleanFormatId(format_id);
 
     const formatStr =
       platform === "youtube"
-        ? isAutoFormat
-          ? "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best"
-          : `${format_id}/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best`
-        : isAutoFormat
-          ? "bestaudio[ext=m4a]/bestaudio/best"
-          : `${format_id}/bestaudio[ext=m4a]/bestaudio/best`;
+        ? audioFormatId
+          ? `${audioFormatId}/bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best`
+          : "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best"
+        : audioFormatId
+          ? `${audioFormatId}/bestaudio[ext=m4a]/bestaudio/best`
+          : "bestaudio[ext=m4a]/bestaudio/best";
 
     const tempRawBase = path.join(os.tmpdir(), `${tempBase}_raw`);
 
