@@ -21,10 +21,13 @@ const normalizeYouTubeUrl = (url) => {
   try {
     const u = new URL(url);
     const shortsMatch = u.pathname.match(/^\/shorts\/([a-zA-Z0-9_-]+)/);
-    if (shortsMatch) return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
+    if (shortsMatch) {
+      return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
+    }
     const videoId = u.searchParams.get("v");
-    if (videoId && u.hostname.includes("youtube.com"))
+    if (videoId && u.hostname.includes("youtube.com")) {
       return `https://www.youtube.com/watch?v=${videoId}`;
+    }
     if (u.hostname === "youtu.be") {
       const id = u.pathname.slice(1).split("/")[0];
       if (id) return `https://www.youtube.com/watch?v=${id}`;
@@ -53,11 +56,13 @@ const normalizeFacebookUrl = (url) => {
 
 // ─── User Agents ──────────────────────────────────────────────────────────────
 const UA_DESKTOP =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
 const UA_INSTAGRAM_MOBILE =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
 
-// ─── BASE OPTIONS ─────────────────────────────────────────────────────────────
+// ─── BASE OPTIONS — restored from previous working code ──────────────────────
+// retries:10, fragmentRetries:10, socketTimeout:60 are critical for Instagram.
+// The new code had dropped these to 3/3/30 which caused silent failures.
 const BASE = {
   ffmpegLocation: ffmpegBin,
   noCheckCertificates: true,
@@ -154,6 +159,7 @@ const friendlyError = (rawMessage = "") => {
   return "Could not fetch media. Ensure the link is public and properly formatted.";
 };
 
+// withRetry — maxAttempts=3 restored from previous working code
 const withRetry = async (fn, maxAttempts = 3, delay = 1500) => {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -191,7 +197,7 @@ const findTempFile = (basePath) => {
     );
     if (finalFile) return path.join(dir, finalFile);
     if (files.length > 0) return path.join(dir, files[0]);
-  } catch (_) {}
+  } catch (err) {}
   return null;
 };
 
@@ -239,6 +245,7 @@ const getMediaInfo = async (req, res) => {
     console.log(`📡 [INFO] Platform: ${platform} | URL: ${targetUrl}`);
 
     const options = getPlatformOptions(platform);
+
     const output = await withRetry(() =>
       youtubedl(targetUrl, { ...options, dumpSingleJson: true }),
     );
@@ -252,10 +259,6 @@ const getMediaInfo = async (req, res) => {
       .filter((f) => {
         const hasV = f.vcodec && f.vcodec !== "none";
         const hasA = f.acodec && f.acodec !== "none";
-
-        // ── KEY FIX: For Instagram/Facebook, keep anything with video.
-        // The previous working code did the same — we let downloadMedia
-        // handle audio merging via format string (format_id+bestaudio/...).
         if (platform === "facebook" || platform === "instagram") {
           return hasV;
         }
@@ -369,12 +372,7 @@ const downloadMedia = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // ═══ FORMAT STRING LOGIC ═══
-  // ── CRITICAL: This is the fix. The previous working code used
-  //    `format_id+bestaudio/format_id/best[ext=mp4]/best` for Instagram,
-  //    which tells yt-dlp to merge the chosen video stream with the best
-  //    available audio. The new code had dropped the +bestaudio part,
-  //    causing silent (audio-less) downloads. ──────────────────────────────
+  // ═══ FORMAT STRING LOGIC — exactly from previous working code ═══
   let formatStr;
 
   if (platform === "youtube") {
@@ -385,10 +383,7 @@ const downloadMedia = async (req, res) => {
         "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
     }
   } else if (platform === "instagram") {
-    // ── RESTORED from previous working code ──────────────────────────────
-    // Always attempt to merge bestaudio alongside the video stream.
-    // Instagram Reels encode audio INTO the progressive mp4, but some
-    // formats come video-only. +bestaudio ensures audio is always present.
+    // EXACTLY from previous working code — +bestaudio merges audio track
     if (format_id && format_id !== "best" && format_id !== "undefined") {
       formatStr = `${format_id}+bestaudio/${format_id}/best[ext=mp4]/best`;
     } else {
@@ -423,7 +418,7 @@ const downloadMedia = async (req, res) => {
             fs.unlinkSync(path.join(dir, f));
           } catch (_) {}
         });
-    } catch (_) {}
+    } catch (e) {}
   };
 
   try {
@@ -432,9 +427,7 @@ const downloadMedia = async (req, res) => {
       format: formatStr,
       output: tempFilePath,
       mergeOutputFormat: "mp4",
-      // Re-encode audio to AAC for maximum browser compatibility.
-      // -c:v copy avoids re-encoding video (fast). -movflags +faststart
-      // enables progressive playback in browsers.
+      // Exactly from previous working code
       postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
     };
 
@@ -470,6 +463,7 @@ const downloadMedia = async (req, res) => {
 
     const stream = fs.createReadStream(actualFile);
     stream.pipe(res);
+
     stream.on("error", () => cleanup());
     res.on("finish", () => cleanup());
     res.on("close", () => cleanup());
@@ -544,9 +538,9 @@ const getAudioInfo = async (req, res) => {
       })
       .sort((a, b) => (b.abr || 0) - (a.abr || 0));
 
-    // ── For Instagram/Facebook: no standalone audio streams exist.
-    //    Fall back to the best combined (video+audio) format.
-    //    downloadAudio will then use ffmpeg to strip the audio track.
+    // For Instagram/Facebook: no standalone audio stream exists.
+    // Fall back to the best combined (video+audio) format.
+    // downloadAudio will use ffmpeg to strip the audio track.
     if (audioFormats.length === 0) {
       const combinedWithAudio = formats
         .filter((f) => f.acodec && f.acodec !== "none")
@@ -633,10 +627,8 @@ const downloadAudio = async (req, res) => {
 
   const options = getPlatformOptions(platform);
 
-  // ── Format selection strategy ─────────────────────────────────────────────
-  // Instagram/Facebook: audio is baked into the progressive mp4 — no
-  // standalone audio stream exists. Download the best combined mp4 and
-  // extract via ffmpeg (same strategy as previous working code for video).
+  // Instagram/Facebook: audio is baked into the progressive mp4.
+  // Download the best combined mp4 and extract via ffmpeg.
   const formatCandidates =
     platform === "instagram" || platform === "facebook"
       ? [
@@ -796,7 +788,7 @@ const downloadAudio = async (req, res) => {
       });
     });
   } catch (ffErr) {
-    // Fallback: retry with -vn instead of -map 0:a:0
+    // Fallback: -vn instead of -map 0:a:0
     console.warn("⚠️ -map 0:a:0 failed, retrying with -vn fallback...");
     const fallbackArgs = [
       "-y",
