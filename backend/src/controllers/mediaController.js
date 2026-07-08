@@ -3,7 +3,48 @@ const path = require("path");
 const ffmpegBin = require("ffmpeg-static");
 const fs = require("fs");
 const os = require("os");
+const { URL } = require("url");
 const { cleanUrl } = require("../utils/helpers");
+
+// ─── Security Checks ─────────────────────────────────────────────────────────
+
+/**
+ * Validates URLs to prevent SSRF (Server-Side Request Forgery) and LFI (Local File Inclusion).
+ * Enforces http/https protocols and rejects loopback/private hostnames.
+ */
+const isValidUrl = (urlStr) => {
+  try {
+    const parsed = new URL(urlStr);
+    
+    // Only allow HTTP and HTTPS protocols (blocks file://, ftp://, etc.)
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+    
+    const host = parsed.hostname.toLowerCase();
+    
+    // Block loopback and standard localhost/private DNS names
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.startsWith("192.168.") ||
+      host.startsWith("10.") ||
+      host.startsWith("169.254.")
+    ) {
+      return false;
+    }
+    
+    // Block class B private network (172.16.0.0 - 172.31.255.255)
+    const match = host.match(/^172\.(1[6-9]|2[0-9]|3[0-1])\./);
+    if (match) return false;
+    
+    return true;
+  } catch (_) {
+    return false;
+  }
+};
 
 // ─── Platform Detection ───────────────────────────────────────────────────────
 
@@ -82,7 +123,6 @@ const BASE = {
 const PLATFORM_OPTIONS = {
   youtube: {
     ...BASE,
-    // CRITICAL FIX: use android + web clients → bypasses most bot checks WITHOUT cookies
     extractorArgs: "youtube:player_client=android,web;player_skip=configs",
     geoBypass: true,
     addHeader: [`user-agent:${UA_DESKTOP}`],
@@ -99,6 +139,22 @@ const PLATFORM_OPTIONS = {
       `user-agent:${UA_INSTAGRAM_MOBILE}`,
       "accept-language:en-US,en;q=0.9",
       "x-ig-app-id:936619743392459",
+    ],
+  },
+  tiktok: {
+    ...BASE,
+    geoBypass: true,
+    addHeader: [
+      "user-agent:Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+      "accept-language:en-US,en;q=0.9",
+    ],
+  },
+  twitter: {
+    ...BASE,
+    geoBypass: true,
+    addHeader: [
+      `user-agent:${UA_DESKTOP}`,
+      "accept-language:en-US,en;q=0.9",
     ],
   },
   generic: {
@@ -213,6 +269,11 @@ const getMediaInfo = async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "URL is required" });
 
+  // Security check: Block SSRF, loopback, and local files (e.g. file://)
+  if (!isValidUrl(url)) {
+    return res.status(400).json({ error: "Invalid URL. Only public HTTP/HTTPS links are allowed." });
+  }
+
   try {
     let targetUrl = cleanUrl(url);
     const platform = detectPlatform(targetUrl);
@@ -307,6 +368,7 @@ const getMediaInfo = async (req, res) => {
         filesize: f.sizeString,
         hasAudio: !!(f.acodec && f.acodec !== "none"),
         hasVideo: !!(f.vcodec && f.vcodec !== "none"),
+        url: f.url || null, // Provide stream URL for in-app browser preview
       }))
       .sort((a, b) =>
         a.hasVideo && b.hasVideo
@@ -318,6 +380,31 @@ const getMediaInfo = async (req, res) => {
               : 0,
       );
 
+    // Get streamable preview URL
+    let previewUrl = null;
+    if (platform === "youtube") {
+      try {
+        const parsed = new URL(targetUrl);
+        const v = parsed.searchParams.get("v");
+        if (v) {
+          previewUrl = `https://www.youtube.com/embed/${v}`;
+        } else if (targetUrl.includes("youtu.be/")) {
+          const parts = targetUrl.split("/");
+          const id = parts[parts.length - 1].split("?")[0];
+          if (id) previewUrl = `https://www.youtube.com/embed/${id}`;
+        }
+      } catch (_) {}
+    } else {
+      const progressiveFormat = formats.find(
+        (f) => f.vcodec && f.vcodec !== "none" && f.acodec && f.acodec !== "none" && f.url
+      );
+      if (progressiveFormat) {
+        previewUrl = progressiveFormat.url;
+      } else {
+        previewUrl = output.url || null;
+      }
+    }
+
     return res.json({
       title: output.title || "Video",
       description: output.description || "",
@@ -325,6 +412,7 @@ const getMediaInfo = async (req, res) => {
       duration: durationSec,
       platform,
       formats: cleanFormats,
+      previewUrl,
     });
   } catch (error) {
     const msg = (error.stderr || error.message || "").toString();
@@ -336,15 +424,24 @@ const getMediaInfo = async (req, res) => {
 // ─── downloadMedia ────────────────────────────────────────────────────────────
 
 const downloadMedia = async (req, res) => {
-  const { url, format_id, title } = req.query;
+  const { url, format_id, title, type } = req.query;
 
   console.log("\n==========================================");
   console.log("🚀 [DOWNLOAD] INITIALIZING...");
 
   if (!url) return res.status(400).send("Missing URL");
 
+  // Security check: Block SSRF, loopback, and local files (e.g. file://)
+  if (!isValidUrl(url)) {
+    return res.status(400).send("Invalid URL. Only public HTTP/HTTPS links are allowed.");
+  }
+
+  // Sanitize variables to prevent any shell/argument injection exploits
+  const safeFormatId = (format_id || "").replace(/[^\w\-\.\+]/g, "");
   const safeTitle =
     (title || "download").replace(/[^\w\s\-]/gi, "").trim() || "download";
+  const isAudioOnly = type === "audio";
+
   let targetUrl = cleanUrl(url);
   const platform = detectPlatform(targetUrl);
 
@@ -360,44 +457,42 @@ const downloadMedia = async (req, res) => {
   // ═══ FORMAT STRING LOGIC ═══
   let formatStr;
 
-  if (platform === "youtube") {
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      // Specific video format + best audio, merge
-      formatStr = `${format_id}+bestaudio[ext=m4a]/${format_id}+bestaudio/best[ext=mp4]/best`;
+  if (isAudioOnly) {
+    formatStr = "bestaudio/best";
+  } else {
+    if (platform === "youtube") {
+      if (safeFormatId && safeFormatId !== "best" && safeFormatId !== "undefined") {
+        // Specific video format + best audio, merge
+        formatStr = `${safeFormatId}+bestaudio[ext=m4a]/${safeFormatId}+bestaudio/best[ext=mp4]/best`;
+      } else {
+        formatStr =
+          "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
+      }
+    } else if (platform === "instagram" || platform === "facebook") {
+      // Prioritize bestvideo+bestaudio merging over pre-packaged progressive streams (which are often muted on IG/FB due to external music)
+      if (safeFormatId && safeFormatId !== "best" && safeFormatId !== "undefined") {
+        formatStr = `${safeFormatId}+bestaudio/${safeFormatId}/best`;
+      } else {
+        formatStr = "bestvideo+bestaudio/best[ext=mp4]/best";
+      }
     } else {
       formatStr =
-        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best";
+        safeFormatId && safeFormatId !== "best" && safeFormatId !== "undefined"
+          ? `${safeFormatId}+bestaudio/${safeFormatId}/best`
+          : "bestvideo+bestaudio/best";
     }
-  } else if (platform === "instagram") {
-    // Instagram reels/posts often come as progressive. Try specific first, fallback to best combined.
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}+bestaudio/${format_id}/best[ext=mp4]/best`;
-    } else {
-      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
-    }
-  } else if (platform === "facebook") {
-    // Facebook: prefer combined progressive
-    if (format_id && format_id !== "best" && format_id !== "undefined") {
-      formatStr = `${format_id}/best[ext=mp4]/best`;
-    } else {
-      formatStr = "best[ext=mp4]/bestvideo+bestaudio/best";
-    }
-  } else {
-    formatStr =
-      format_id && format_id !== "best" && format_id !== "undefined"
-        ? `${format_id}+bestaudio/${format_id}/best`
-        : "bestvideo+bestaudio/best";
   }
 
-  console.log(`🎯 Format string: ${formatStr}`);
+  console.log(`🎯 Format string: ${formatStr} | Type: ${isAudioOnly ? 'audio' : 'video'}`);
 
   const tempBase = `udl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  // Safe tempFilePath generated purely internally
   const tempFilePath = path.join(os.tmpdir(), `${tempBase}.mp4`);
 
   const cleanup = () => {
     try {
       const dir = path.dirname(tempFilePath);
-      const base = path.basename(tempFilePath, path.extname(tempFilePath));
+      const base = path.basename(tempFilePath, tempFilePath.indexOf(".") !== -1 ? path.extname(tempFilePath) : "");
       fs.readdirSync(dir)
         .filter((f) => f.startsWith(base))
         .forEach((f) => {
@@ -413,10 +508,17 @@ const downloadMedia = async (req, res) => {
       ...options,
       format: formatStr,
       output: tempFilePath,
-      mergeOutputFormat: "mp4",
-      // Ensure final container is mp4 with AAC audio for browser compatibility
-      postprocessorArgs: "ffmpeg:-c:v copy -c:a aac -movflags +faststart",
     };
+
+    if (isAudioOnly) {
+      ytdlpOptions.extractAudio = true;
+      ytdlpOptions.audioFormat = "mp3";
+      ytdlpOptions.audioQuality = "0"; // Best quality MP3
+    } else {
+      ytdlpOptions.mergeOutputFormat = "mp4";
+      // Ensure final container is mp4 with AAC audio for browser compatibility
+      ytdlpOptions.postprocessorArgs = "ffmpeg:-c:v copy -c:a aac -movflags +faststart";
+    }
 
     console.log("⏳ Running yt-dlp download...");
     await withRetry(() => youtubedl(targetUrl, ytdlpOptions), 2, 2000);
@@ -432,7 +534,7 @@ const downloadMedia = async (req, res) => {
       throw new Error("Downloaded file is empty. Video may be unavailable.");
     }
 
-    const ext = path.extname(actualFile).slice(1) || "mp4";
+    const ext = path.extname(actualFile).slice(1) || (isAudioOnly ? "mp3" : "mp4");
     const mimeTypes = {
       mp4: "video/mp4",
       mkv: "video/x-matroska",
@@ -441,7 +543,7 @@ const downloadMedia = async (req, res) => {
       mp3: "audio/mpeg",
     };
 
-    res.setHeader("Content-Type", mimeTypes[ext] || "video/mp4");
+    res.setHeader("Content-Type", mimeTypes[ext] || (isAudioOnly ? "audio/mpeg" : "video/mp4"));
     res.setHeader("Content-Length", stat.size);
     res.setHeader(
       "Content-Disposition",
