@@ -106,7 +106,24 @@ const UA_DESKTOP =
 const UA_INSTAGRAM_MOBILE =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
 
-// ─── BASE OPTIONS (ZERO COOKIES) ──────────────────────────────────────────────
+// ─── BASE OPTIONS (DYNAMIC COOKIES) ───────────────────────────────────────────
+
+const getCookiesPath = () => {
+  const paths = [
+    path.join(__dirname, "..", "..", "cookies.txt"),
+    path.join(__dirname, "..", "cookies.txt"),
+    path.join(__dirname, "cookies.txt"),
+  ];
+  for (const p of paths) {
+    if (fs.existsSync(p)) {
+      console.log(`🍪 Found cookies.txt at: ${p}`);
+      return p;
+    }
+  }
+  return null;
+};
+
+const cookiesPath = getCookiesPath();
 
 const BASE = {
   ffmpegLocation: ffmpegBin,
@@ -118,6 +135,7 @@ const BASE = {
   noPlaylist: true,
   bufferSize: "16K",
   preferFreeFormats: true,
+  ...(cookiesPath ? { cookies: cookiesPath } : {}),
 };
 
 const PLATFORM_OPTIONS = {

@@ -1,7 +1,10 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 
-const API_BASE = "https://universal-media-downloader-re6r.onrender.com";
+const API_BASE =
+  typeof window !== "undefined" && window.location.hostname === "localhost"
+    ? "http://localhost:5000"
+    : "https://universal-media-downloader-9lff.onrender.com"; // Live Render API endpoint
 
 // --- Custom SVGs for platforms & tabs (No Emojis) ---
 const YouTubeIcon = ({ className }) => (
